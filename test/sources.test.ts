@@ -48,6 +48,17 @@ test("accepts a relative local path", () => {
   assert.equal(sourceIdentity(source), `local:${resolve("./my-package")}`);
 });
 
+test("preserves unpinned SSH git sources", () => {
+  const source = parsePiSource("git:git@host:repo");
+
+  assert.deepEqual(source, {
+    kind: "git",
+    spec: "git:git@host:repo",
+    url: "git@host:repo",
+  });
+  assert.equal(sourceIdentity(source), "git:git@host:repo");
+});
+
 test("preserves SSH git sources", () => {
   const source = parsePiSource("git:git@github.com:acme/pi-tools@abc123");
 

@@ -61,7 +61,11 @@ function parseNpmSource(spec: string): Source {
 function parseGitSource(spec: string, urlAndRef: string): Source {
   const refSeparator = urlAndRef.lastIndexOf("@");
   const repositoryPathEnd = urlAndRef.lastIndexOf("/");
-  const hasRef = refSeparator > repositoryPathEnd;
+  const sshUserInfoSeparator = urlAndRef.indexOf("@");
+  const isScpStyleSshSource = /^[^/@]+@[^/:]+:/.test(urlAndRef);
+  const hasRef =
+    refSeparator > repositoryPathEnd &&
+    (!isScpStyleSshSource || refSeparator > sshUserInfoSeparator);
 
   return hasRef
     ? {
