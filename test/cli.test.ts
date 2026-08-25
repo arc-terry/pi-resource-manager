@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { execFile as execFileCallback } from "node:child_process";
 import test from "node:test";
 import { promisify } from "node:util";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { displayType } from "../src/domain.js";
+import { makeTempDir } from "./helpers.js";
 import { buildProgram, renderChecklist } from "../src/cli.js";
 
 const execFile = promisify(execFileCallback);
@@ -210,6 +213,18 @@ test("sets a nonzero exit code when an action summary reports failures", async (
   } finally {
     process.exitCode = originalExitCode;
   }
+});
+
+test("executable list uses the real catalog and scanner dependencies", async () => {
+  const agentDir = join(await makeTempDir(), "agent");
+  await mkdir(agentDir, { recursive: true });
+  await writeFile(join(agentDir, "settings.json"), "{}");
+
+  const { stdout } = await execFile(process.execPath, ["--import", "tsx", "src/cli.ts", "list"], {
+    env: { ...process.env, PI_CODING_AGENT_DIR: agentDir },
+  });
+
+  assert.equal(stdout, "\n");
 });
 
 test("executable help exposes every Task 7 command", async () => {

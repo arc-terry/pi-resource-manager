@@ -1,4 +1,5 @@
 import { Command, InvalidArgumentError } from "commander";
+import { createCommandDependencies } from "./commands.js";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -144,7 +145,7 @@ export function buildProgram(deps: CommandDependencies): Command {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  buildProgram({}).parseAsync().catch((error: unknown) => {
+  buildProgram(createCommandDependencies()).parseAsync().catch((error: unknown) => {
     console.error(error);
     process.exitCode = 1;
   });
