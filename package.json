@@ -1,9 +1,9 @@
 {
-  "name": "pi-collection",
+  "name": "pi-resource-manager",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "bin": { "pi-collection": "./dist/cli.js" },
+  "bin": { "pi-resource-manager": "./dist/cli.js" },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "tsx --test test/**/*.test.ts",

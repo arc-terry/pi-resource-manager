@@ -55,7 +55,7 @@ export function buildProgram(deps: CommandDependencies): Command {
     if (hasFailures(summary)) process.exitCode = 1;
   };
   const program = new Command()
-    .name("pi-collection")
+    .name("pi-resource-manager")
     .description("Manage Pi packages, skills, and plugins");
 
   program

@@ -10,6 +10,10 @@ import { buildProgram, renderChecklist } from "../src/cli.js";
 
 const execFile = promisify(execFileCallback);
 
+test("uses pi-resource-manager as its CLI identity", () => {
+  assert.equal(buildProgram({}).name(), "pi-resource-manager");
+});
+
 test("renders extensions as plugins for CLI users", () => {
   assert.equal(displayType("package"), "package");
   assert.equal(displayType("skill"), "skill");
@@ -49,7 +53,7 @@ test("list forwards its type filter and renders the selected checklist entries",
     write: (text: string) => { stdout += text; },
   } as never);
 
-  await program.parseAsync(["node", "pi-collection", "list", "--type", "plugin"]);
+  await program.parseAsync(["node", "pi-resource-manager", "list", "--type", "plugin"]);
 
   assert.equal(stdout, "[ ] plugin team\n");
 });
@@ -61,7 +65,7 @@ test("list emits JSON without checklist markers when requested", async () => {
     write: (text: string) => { stdout += text; },
   } as never);
 
-  await program.parseAsync(["node", "pi-collection", "list", "--json"]);
+  await program.parseAsync(["node", "pi-resource-manager", "list", "--json"]);
 
   assert.deepEqual(JSON.parse(stdout), [{ installed: true, entry: { type: "package", name: "tools", source: "npm:tools" } }]);
   assert.doesNotMatch(stdout, /\[v]/);
@@ -79,7 +83,7 @@ test("install forwards selected names and confirmation options", async () => {
   } as never);
   program.exitOverride();
 
-  await program.parseAsync(["node", "pi-collection", "install", "tools", "team", "--full", "--type", "plugin", "--yes"]);
+  await program.parseAsync(["node", "pi-resource-manager", "install", "tools", "team", "--full", "--type", "plugin", "--yes"]);
 
   assert.deepEqual(received, { names: ["tools", "team"], options: { full: true, type: "plugin", yes: true } });
   assert.equal(stdout, "{\"installed\":2}\n");
@@ -96,7 +100,7 @@ test("remove forwards the selected names, type, and confirmation", async () => {
   } as never);
   program.exitOverride();
 
-  await program.parseAsync(["node", "pi-collection", "remove", "tools", "--type", "package", "--yes"]);
+  await program.parseAsync(["node", "pi-resource-manager", "remove", "tools", "--type", "package", "--yes"]);
 
   assert.deepEqual(received, { names: ["tools"], options: { type: "package", yes: true } });
 });
@@ -112,7 +116,7 @@ test("add forwards local plugin validation and dry-run options", async () => {
   } as never);
   program.exitOverride();
 
-  await program.parseAsync(["node", "pi-collection", "add", "npm:team", "--local", "--type", "plugin", "--dry-run", "--yes"]);
+  await program.parseAsync(["node", "pi-resource-manager", "add", "npm:team", "--local", "--type", "plugin", "--dry-run", "--yes"]);
 
   assert.deepEqual(received, {
     source: "npm:team",
@@ -131,7 +135,7 @@ test("profile scan uses its default output path and forwards the project", async
   } as never);
   program.exitOverride();
 
-  await program.parseAsync(["node", "pi-collection", "profile", "scan", "--project", "/workspace"]);
+  await program.parseAsync(["node", "pi-resource-manager", "profile", "scan", "--project", "/workspace"]);
 
   assert.deepEqual(received, { output: "pi-profile.yml", project: "/workspace" });
 });
@@ -149,7 +153,7 @@ test("profile show forwards its path and renders the loaded profile", async () =
   program.exitOverride();
   program.commands.find((command) => command.name() === "profile")?.exitOverride();
 
-  await program.parseAsync(["node", "pi-collection", "profile", "show", "saved.yml"]);
+  await program.parseAsync(["node", "pi-resource-manager", "profile", "show", "saved.yml"]);
 
   assert.equal(received, "saved.yml");
   assert.equal(stdout, "{\"schemaVersion\":1,\"packages\":[]}\n");
@@ -168,7 +172,7 @@ test("profile restore forwards dry-run filters and prints planned actions", asyn
   program.exitOverride();
   program.commands.find((command) => command.name() === "profile")?.exitOverride();
 
-  await program.parseAsync(["node", "pi-collection", "profile", "restore", "saved.yml", "--dry-run", "--only", "plugin", "--project", "/workspace", "--yes"]);
+  await program.parseAsync(["node", "pi-resource-manager", "profile", "restore", "saved.yml", "--dry-run", "--only", "plugin", "--project", "/workspace", "--yes"]);
 
   assert.deepEqual(received, {
     path: "saved.yml",
@@ -192,7 +196,7 @@ test("rejects unsupported CLI resource types before invoking add", async () => {
   add?.exitOverride();
 
   await assert.rejects(
-    program.parseAsync(["node", "pi-collection", "add", "npm:tools", "--type", "extension"]),
+    program.parseAsync(["node", "pi-resource-manager", "add", "npm:tools", "--type", "extension"]),
     /type must be package, skill, or plugin/,
   );
   assert.equal(called, false);
@@ -207,7 +211,7 @@ test("sets a nonzero exit code when an action summary reports failures", async (
       write: () => undefined,
     } as never);
 
-    await program.parseAsync(["node", "pi-collection", "install", "tools", "--yes"]);
+    await program.parseAsync(["node", "pi-resource-manager", "install", "tools", "--yes"]);
 
     assert.equal(process.exitCode, 1);
   } finally {
