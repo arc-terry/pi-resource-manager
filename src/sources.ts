@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 
 export type Source =
@@ -26,7 +27,7 @@ export function parsePiSource(input: string): Source {
   }
 
   if (isAbsolute(input) || input.startsWith("./") || input.startsWith("../")) {
-    return { kind: "local-path", path: resolve(input) };
+    return { kind: "local-path", path: canonicalLocalPath(input) };
   }
 
   throw new SourceParseError(input);
@@ -39,7 +40,17 @@ export function sourceIdentity(source: Source): string {
     case "git":
       return `git:${source.url}`;
     case "local-path":
-      return `local:${resolve(source.path)}`;
+      return `local:${canonicalLocalPath(source.path)}`;
+  }
+}
+
+function canonicalLocalPath(path: string): string {
+  const resolved = resolve(path);
+  try {
+    return realpathSync(resolved);
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return resolved;
+    throw error;
   }
 }
 

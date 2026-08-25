@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolve } from "node:path";
+import { mkdir, realpath, symlink } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { parsePiSource, sourceIdentity } from "../src/sources.js";
+import { makeTempDir } from "./helpers.js";
 
 test("parses pinned npm specs", () => {
   const source = parsePiSource("npm:@acme/pi-tools@1.2.3");
@@ -46,6 +48,16 @@ test("accepts a relative local path", () => {
 
   assert.deepEqual(source, { kind: "local-path", path: resolve("./my-package") });
   assert.equal(sourceIdentity(source), `local:${resolve("./my-package")}`);
+});
+
+test("canonicalizes an existing local source symlink", async () => {
+  const root = await makeTempDir();
+  const target = join(root, "target");
+  const link = join(root, "link");
+  await mkdir(target);
+  await symlink(target, link);
+
+  assert.deepEqual(parsePiSource(link), { kind: "local-path", path: await realpath(target) });
 });
 
 test("preserves unpinned SSH git sources", () => {
