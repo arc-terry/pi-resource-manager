@@ -58,6 +58,18 @@ test("does not report an extension directory without an index module", async () 
   assert.deepEqual(scan.extensions, []);
 });
 
+test("creates missing settings directories when restoring a configured path", async () => {
+  const settingsPath = join(await makeTempDir(), "project", ".pi", "settings.json");
+  const update = (settings as typeof settings & {
+    updateSettingsArray?: (path: string, key: "skills" | "extensions", value: string) => Promise<void>;
+  }).updateSettingsArray;
+
+  assert.equal(typeof update, "function");
+  await update!(settingsPath, "skills", "/sources/review");
+
+  assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), { skills: ["/sources/review"] });
+});
+
 test("updates a configured extensions array without losing unrelated settings", async () => {
   const file = join(await makeTempDir(), "settings.json");
   await writeFile(file, JSON.stringify({ packages: ["npm:tools"], extensions: ["existing.ts"], theme: "night" }));
