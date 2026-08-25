@@ -18,6 +18,7 @@ export interface CommandRuntime {
   piPath?: string;
   input?: NodeJS.ReadableStream;
   output?: NodeJS.WritableStream;
+  projectRoot?: string;
 }
 
 export function createCommandDependencies(runtime: CommandRuntime = {}): CommandDependencies {
@@ -51,7 +52,7 @@ export async function installCatalogEntries(
   if (!await confirm(`Install ${sources.length} Pi source(s)?`, { yes: options.yes, input: runtime.input, output: runtime.output })) {
     return { installed: 0, skipped: sources.length };
   }
-  return runSourceActions(sources, "install", runtime, "installed");
+  return runSourceActions(sources.map((source) => ["install", source]), runtime, "installed");
 }
 
 export async function removeCatalogEntries(
@@ -64,7 +65,15 @@ export async function removeCatalogEntries(
   if (!await confirm(`Remove ${sources.length} Pi source(s)?`, { yes: options.yes, input: runtime.input, output: runtime.output })) {
     return { removed: 0, skipped: sources.length };
   }
-  return runSourceActions(sources, "remove", runtime, "removed");
+  const scan = await scanPi({
+    agentDir: runtime.agentDir,
+    projectRoot: runtime.projectRoot ?? process.cwd(),
+  });
+  const actions = sources.map((source) => {
+    const resource = scan.packages.find((item) => sourceIdentity(item.source) === sourceIdentity(parsePiSource(source)));
+    return ["remove", ...(resource?.scope === "local" ? ["-l"] : []), source];
+  });
+  return runSourceActions(actions, runtime, "removed");
 }
 
 export async function addSource(
@@ -149,15 +158,14 @@ function uniqueSources(sources: string[]): string[] {
 }
 
 async function runSourceActions(
-  sources: string[],
-  operation: "install" | "remove",
+  actions: string[][],
   runtime: CommandRuntime,
   resultKey: "installed" | "removed",
 ): Promise<Summary> {
   const summary: Summary = { [resultKey]: 0, failed: 0, failures: [] };
-  for (const source of sources) {
+  for (const args of actions) {
     try {
-      await runPi([operation, source], { piPath: runtime.piPath });
+      await runPi(args, { piPath: runtime.piPath });
       summary[resultKey] = (summary[resultKey] ?? 0) + 1;
     } catch (error: unknown) {
       summary.failed = (summary.failed ?? 0) + 1;

@@ -64,6 +64,22 @@ test("installs and removes exactly the selected catalog sources through Pi", asy
   assert.equal(await readFile(log, "utf8"), "install npm:tools\nremove npm:tools\n");
 });
 
+test("removes a source from its detected local Pi scope", async () => {
+  const root = await makeTempDir();
+  const projectRoot = join(root, "project");
+  const agentDir = join(root, "agent");
+  const catalogPath = join(root, "catalog.yml");
+  const { path, log } = await createFakePi(root);
+  await mkdir(join(projectRoot, ".pi"), { recursive: true });
+  await writeFile(join(projectRoot, ".pi", "settings.json"), JSON.stringify({ packages: ["npm:tools"] }));
+  await writeFile(catalogPath, "schemaVersion: 1\nentries:\n  - name: tools\n    type: package\n    source: npm:tools\n");
+
+  const summary = await removeCatalogEntries(["tools"], { yes: true }, { catalogPath, piPath: path, agentDir, projectRoot });
+
+  assert.equal(summary.removed, 1);
+  assert.equal(await readFile(log, "utf8"), "remove -l npm:tools\n");
+});
+
 test("marks a matching catalog entry installed", () => {
   const scan: ScanResult = {
     packages: [
