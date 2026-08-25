@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { Command, InvalidArgumentError } from "commander";
 import { createCommandDependencies } from "./commands.js";
 import { resolve } from "node:path";
