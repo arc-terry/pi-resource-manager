@@ -1,0 +1,119 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { locationsFor, updateSettingsArray } from "../src/settings.js";
+import { scanPi } from "../src/scanner.js";
+import { makeTempDir } from "./helpers.js";
+
+test("scans package settings plus global skills and extensions", async () => {
+  const root = await makeTempDir(); const agentDir = join(root, "agent");
+  await mkdir(join(agentDir, "skills", "review"), { recursive: true });
+  await mkdir(join(agentDir, "extensions"), { recursive: true });
+  await writeFile(join(agentDir, "skills", "review", "SKILL.md"), "---\nname: review\ndescription: Review code\n---\n");
+  await writeFile(join(agentDir, "extensions", "team.ts"), "export default () => {};");
+  await writeFile(join(agentDir, "settings.json"), JSON.stringify({ packages: ["npm:@acme/pi-tools@1.2.3"] }));
+  const scan = await scanPi({ agentDir });
+  assert.equal(scan.packages[0]?.source.spec, "npm:@acme/pi-tools@1.2.3");
+  assert.equal(scan.skills[0]?.name, "review");
+  assert.equal(scan.extensions[0]?.name, "team");
+});
+
+test("uses documented global and local Pi locations", async () => {
+  const root = await makeTempDir();
+  const agentDir = join(root, "agent");
+  const projectRoot = join(root, "project");
+
+  assert.deepEqual(locationsFor("global", agentDir), {
+    agentDir,
+    settingsPath: join(agentDir, "settings.json"),
+    packageDirs: [join(agentDir, "npm"), join(agentDir, "git")],
+    skillsDirs: [join(agentDir, "skills"), join(homedir(), ".agents", "skills")],
+    extensionsDir: join(agentDir, "extensions"),
+  });
+  assert.throws(() => locationsFor("local", agentDir), /projectRoot/);
+  assert.deepEqual(locationsFor("local", agentDir, projectRoot), {
+    agentDir,
+    settingsPath: join(projectRoot, ".pi", "settings.json"),
+    packageDirs: [join(projectRoot, ".pi", "npm"), join(projectRoot, ".pi", "git")],
+    skillsDirs: [join(projectRoot, ".pi", "skills"), join(projectRoot, ".agents", "skills")],
+    extensionsDir: join(projectRoot, ".pi", "extensions"),
+  });
+});
+
+test("discovers direct Markdown skills as distinct resources", async () => {
+  const root = await makeTempDir(); const agentDir = join(root, "agent");
+  const skillsDir = join(agentDir, "skills");
+  await mkdir(skillsDir, { recursive: true });
+  const alpha = join(skillsDir, "alpha.md");
+  const beta = join(skillsDir, "beta.md");
+  await writeFile(alpha, "---\nname: alpha\ndescription: Alpha skill\n---\n");
+  await writeFile(beta, "---\nname: beta\ndescription: Beta skill\n---\n");
+
+  const scan = await scanPi({ agentDir });
+
+  assert.deepEqual(scan.skills.map((resource) => resource.name), ["alpha", "beta"]);
+  assert.deepEqual(scan.skills.map((resource) => resource.installedPath), [await realpath(alpha), await realpath(beta)]);
+});
+
+test("updates a settings array without dropping unrelated settings", async () => {
+  const root = await makeTempDir();
+  const path = join(root, "settings.json");
+  await writeFile(path, JSON.stringify({ packages: ["npm:acme"], skills: ["old"], theme: "dark" }));
+
+  await updateSettingsArray(path, "skills", "new");
+
+  assert.deepEqual(JSON.parse(await readFile(path, "utf8")), {
+    packages: ["npm:acme"], skills: ["old", "new"], theme: "dark",
+  });
+});
+
+test("scans local package settings and extension directory indexes", async () => {
+  const root = await makeTempDir();
+  const projectRoot = join(root, "project");
+  await mkdir(join(projectRoot, ".pi", "extensions", "project-tools"), { recursive: true });
+  await writeFile(join(projectRoot, ".pi", "extensions", "project-tools", "index.ts"), "export default () => {};");
+  await writeFile(join(projectRoot, ".pi", "settings.json"), JSON.stringify({ packages: ["npm:project-tools@1"] }));
+
+  const scan = await scanPi({ agentDir: join(root, "agent"), projectRoot });
+
+  assert.equal(scan.packages.find((resource) => resource.source.spec === "npm:project-tools@1")?.scope, "local");
+  assert.equal(scan.extensions.find((resource) => resource.name === "project-tools")?.scope, "local");
+});
+
+test("discovers configured extensions and package-provided resources with provenance", async () => {
+  const root = await makeTempDir(); const agentDir = join(root, "agent");
+  const packageRoot = join(agentDir, "npm", "@acme", "pi-tools");
+  const configuredExtension = join(root, "configured.ts");
+  await mkdir(join(packageRoot, "skills", "package-review"), { recursive: true });
+  await mkdir(join(packageRoot, "extensions"), { recursive: true });
+  await writeFile(join(packageRoot, "package.json"), JSON.stringify({ pi: { skills: ["skills/package-review"], extensions: ["extensions/package-tools.ts"] } }));
+  await writeFile(join(packageRoot, "skills", "package-review", "SKILL.md"), "---\nname: package-review\ndescription: Review packages\n---\n");
+  await writeFile(join(packageRoot, "extensions", "package-tools.ts"), "export default () => {};");
+  await writeFile(configuredExtension, "export default () => {};");
+  await writeFile(join(agentDir, "settings.json"), JSON.stringify({
+    packages: ["npm:@acme/pi-tools@1.2.3"], extensions: [configuredExtension],
+  }));
+
+  const scan = await scanPi({ agentDir });
+  const packageResource = scan.packages.find((resource) => resource.source.spec === "npm:@acme/pi-tools@1.2.3");
+
+  assert.ok(packageResource);
+  assert.equal(scan.extensions.find((resource) => resource.name === "configured")?.source.kind, "local-path");
+  assert.equal(scan.skills.find((resource) => resource.name === "package-review")?.ownerPackageId, packageResource.id);
+  assert.equal(scan.extensions.find((resource) => resource.name === "package-tools")?.ownerPackageId, packageResource.id);
+});
+
+test("deduplicates a configured extension already found in its documented directory", async () => {
+  const root = await makeTempDir(); const agentDir = join(root, "agent");
+  const extensionPath = join(agentDir, "extensions", "team.ts");
+  await mkdir(join(agentDir, "extensions"), { recursive: true });
+  await writeFile(extensionPath, "export default () => {};");
+  await writeFile(join(agentDir, "settings.json"), JSON.stringify({ extensions: [extensionPath] }));
+
+  const scan = await scanPi({ agentDir });
+  const canonicalExtensionPath = await realpath(extensionPath);
+
+  assert.equal(scan.extensions.filter((resource) => resource.installedPath === canonicalExtensionPath).length, 1);
+});
