@@ -63,7 +63,7 @@ export function profileFromScan(
     scope: resource.scope,
     installedPath: resource.installedPath,
     ...(resource.projectRoot ? { projectRoot: resource.projectRoot } : {}),
-    ...(resource.ownerPackageId ? { ownerPackageId: resource.ownerPackageId } : {}),
+    ...(resource.ownerPackageId !== undefined ? { ownerPackageId: resource.ownerPackageId } : {}),
     source: cloneSource(resource.source),
   });
 
