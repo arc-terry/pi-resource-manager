@@ -1,4 +1,5 @@
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
+import { homedir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import type { Resource, Scope, Source } from "./domain.js";
@@ -22,6 +23,25 @@ interface SkillFile {
   name: string;
 }
 
+interface PackageEntry {
+  source: Source;
+  skills?: string[];
+  extensions?: string[];
+}
+
+interface LoadedScope extends ScanScope {
+  settings: Record<string, unknown>;
+  packages: PackageEntry[];
+}
+
+interface SkillDiscoveryOptions {
+  includeRootMarkdown: boolean;
+  includeNestedMarkdown: boolean;
+}
+
+const standardSkillDiscovery: SkillDiscoveryOptions = { includeRootMarkdown: true, includeNestedMarkdown: false };
+const agentsSkillDiscovery: SkillDiscoveryOptions = { includeRootMarkdown: false, includeNestedMarkdown: true };
+
 export async function scanPi(options: { agentDir?: string; projectRoot?: string }): Promise<ScanResult> {
   const agentDir = options.agentDir ?? defaultAgentDir();
   const scopes: ScanScope[] = [{ scope: "global", locations: locationsFor("global", agentDir) }];
@@ -33,37 +53,61 @@ export async function scanPi(options: { agentDir?: string; projectRoot?: string 
     });
   }
 
+  const loadedScopes = await Promise.all(scopes.map(loadScope));
+  const localPackageIdentities = new Set(
+    loadedScopes.filter((scanScope) => scanScope.scope === "local")
+      .flatMap((scanScope) => scanScope.packages.map((entry) => sourceIdentity(entry.source))),
+  );
   const result: ScanResult = { packages: [], skills: [], extensions: [] };
   const seen = new Set<string>();
-  for (const scanScope of scopes) await scanScopeResources(scanScope, result, seen);
+  for (const scanScope of loadedScopes) {
+    await scanScopeResources(scanScope, result, seen, scanScope.scope === "global" ? localPackageIdentities : new Set());
+  }
   return result;
 }
 
-async function scanScopeResources(scanScope: ScanScope, result: ScanResult, seen: Set<string>): Promise<void> {
+async function loadScope(scanScope: ScanScope): Promise<LoadedScope> {
   const settings = await readSettings(scanScope.locations.settingsPath);
-  const packageResources: Resource[] = [];
+  return {
+    ...scanScope,
+    settings,
+    packages: packageEntries(settings.packages, scanScope.locations.settingsPath),
+  };
+}
 
-  for (const spec of stringValues(settings.packages)) {
-    const source = parsePiSource(spec);
-    const installedPath = await packagePath(source, scanScope.locations.packageDirs);
-    const resource = packageResource(source, installedPath, scanScope);
+async function scanScopeResources(
+  scanScope: LoadedScope,
+  result: ScanResult,
+  seen: Set<string>,
+  overriddenPackageIdentities: Set<string>,
+): Promise<void> {
+  const packageResources: Array<{ entry: PackageEntry; resource: Resource }> = [];
+  const scannedPackageIdentities = new Set<string>();
+
+  for (const entry of scanScope.packages) {
+    const identity = sourceIdentity(entry.source);
+    if (overriddenPackageIdentities.has(identity) || scannedPackageIdentities.has(identity)) continue;
+    scannedPackageIdentities.add(identity);
+    const installedPath = await packagePath(entry.source, scanScope.locations.packageDirs);
+    const resource = packageResource(entry.source, installedPath, scanScope);
     add(result.packages, resource, seen);
-    packageResources.push(resource);
+    packageResources.push({ entry, resource });
   }
 
-  for (const resource of packageResources) {
-    await scanPackageResources(resource, scanScope, result, seen);
+  for (const { entry, resource } of packageResources) {
+    await scanPackageResources(resource, entry, scanScope, result, seen);
   }
 
-  for (const skillsDir of scanScope.locations.skillsDirs) {
-    await scanSkills(skillsDir, undefined, scanScope, result, seen);
+  for (const [index, skillsDir] of scanScope.locations.skillsDirs.entries()) {
+    await scanSkills(skillsDir, undefined, scanScope, result, seen, index === 1 ? agentsSkillDiscovery : standardSkillDiscovery);
   }
-  for (const skillPath of stringValues(settings.skills)) {
-    await scanSkills(configuredPath(skillPath, scanScope.locations.settingsPath), undefined, scanScope, result, seen);
+  for (const skillPath of stringValues(scanScope.settings.skills)) {
+    const path = configuredPath(skillPath, scanScope.locations.settingsPath);
+    await scanSkills(path, undefined, scanScope, result, seen, skillDiscoveryFor(path));
   }
 
   await scanExtensions(scanScope.locations.extensionsDir, undefined, scanScope, result, seen);
-  for (const extensionPath of stringValues(settings.extensions)) {
+  for (const extensionPath of stringValues(scanScope.settings.extensions)) {
     await scanExtensions(configuredPath(extensionPath, scanScope.locations.settingsPath), undefined, scanScope, result, seen);
   }
 }
@@ -83,16 +127,17 @@ function packageResource(source: Source, installedPath: string, scanScope: ScanS
 
 async function scanPackageResources(
   resource: Resource,
+  entry: PackageEntry,
   scanScope: ScanScope,
   result: ScanResult,
   seen: Set<string>,
 ): Promise<void> {
   const pi = await packagePiConfig(resource.installedPath);
-  const skillPaths = pi?.skills ?? [join(resource.installedPath, "skills")];
-  const extensionPaths = pi?.extensions ?? [join(resource.installedPath, "extensions")];
+  const skillPaths = entry.skills ?? pi?.skills ?? [join(resource.installedPath, "skills")];
+  const extensionPaths = entry.extensions ?? pi?.extensions ?? [join(resource.installedPath, "extensions")];
 
   for (const skillPath of skillPaths) {
-    await scanSkills(packagePathEntry(resource.installedPath, skillPath), resource, scanScope, result, seen);
+    await scanSkills(packagePathEntry(resource.installedPath, skillPath), resource, scanScope, result, seen, standardSkillDiscovery);
   }
   for (const extensionPath of extensionPaths) {
     await scanExtensions(packagePathEntry(resource.installedPath, extensionPath), resource, scanScope, result, seen);
@@ -121,8 +166,9 @@ async function scanSkills(
   scanScope: ScanScope,
   result: ScanResult,
   seen: Set<string>,
+  discovery: SkillDiscoveryOptions,
 ): Promise<void> {
-  for (const skill of await findSkills(path)) {
+  for (const skill of await findSkills(path, discovery)) {
     const installedPath = await canonicalPath(skill.installedPath);
     const source = owner?.source ?? { kind: "local-path" as const, path: installedPath };
     add(result.skills, {
@@ -161,7 +207,7 @@ async function scanExtensions(
   }
 }
 
-async function findSkills(path: string): Promise<SkillFile[]> {
+async function findSkills(path: string, discovery: SkillDiscoveryOptions): Promise<SkillFile[]> {
   if (await isFile(path)) {
     const skill = await skillFromFile(path);
     return skill ? [skill] : [];
@@ -171,17 +217,17 @@ async function findSkills(path: string): Promise<SkillFile[]> {
   const skills: SkillFile[] = [];
   for (const entry of await readdir(path, { withFileTypes: true })) {
     const entryPath = join(path, entry.name);
-    if (entry.isFile() && entry.name.endsWith(".md")) {
+    if (entry.isFile() && discovery.includeRootMarkdown && entry.name.endsWith(".md")) {
       const skill = await skillFromFile(entryPath);
       if (skill) skills.push(skill);
     } else if (entry.isDirectory()) {
-      skills.push(...await findNestedSkills(entryPath));
+      skills.push(...await findNestedSkills(entryPath, discovery.includeNestedMarkdown));
     }
   }
   return skills;
 }
 
-async function findNestedSkills(path: string): Promise<SkillFile[]> {
+async function findNestedSkills(path: string, includeMarkdown: boolean): Promise<SkillFile[]> {
   const skillPath = join(path, "SKILL.md");
   const skills: SkillFile[] = [];
   if (await isFile(skillPath)) {
@@ -190,7 +236,13 @@ async function findNestedSkills(path: string): Promise<SkillFile[]> {
   }
   if (!await isDirectory(path)) return skills;
   for (const entry of await readdir(path, { withFileTypes: true })) {
-    if (entry.isDirectory()) skills.push(...await findNestedSkills(join(path, entry.name)));
+    const entryPath = join(path, entry.name);
+    if (entry.isDirectory()) {
+      skills.push(...await findNestedSkills(entryPath, includeMarkdown));
+    } else if (includeMarkdown && entry.isFile() && entry.name !== "SKILL.md" && entry.name.endsWith(".md")) {
+      const skill = await skillFromFile(entryPath);
+      if (skill) skills.push(skill);
+    }
   }
   return skills;
 }
@@ -236,8 +288,14 @@ async function packagePath(source: Source, packageDirs: string[]): Promise<strin
   if (source.kind === "local-path") return canonicalPath(source.path);
   const root = source.kind === "npm"
     ? join(packageDirs[0], source.name)
-    : join(packageDirs[1], source.url.replace(/^[a-z]+:\/\//, ""));
+    : join(packageDirs[1], gitDirectory(source.url));
   return canonicalPath(root);
+}
+
+function gitDirectory(url: string): string {
+  const sshMatch = /^(?:[^@]+@)?([^:]+):(.+)$/.exec(url);
+  if (sshMatch) return join(sshMatch[1], sshMatch[2]);
+  return url.replace(/^[a-z]+:\/\//, "");
 }
 
 function packageName(source: Source): string {
@@ -247,11 +305,32 @@ function packageName(source: Source): string {
 }
 
 function configuredPath(path: string, settingsPath: string): string {
-  return resolve(dirname(settingsPath), path);
+  const expandedPath = path === "~" ? homedir() : path.startsWith("~/") ? join(homedir(), path.slice(2)) : path;
+  return resolve(dirname(settingsPath), expandedPath);
+}
+
+function skillDiscoveryFor(path: string): SkillDiscoveryOptions {
+  return basename(path) === "skills" && basename(dirname(path)) === ".agents"
+    ? agentsSkillDiscovery
+    : standardSkillDiscovery;
 }
 
 function packagePathEntry(packageRoot: string, path: string): string {
   return resolve(packageRoot, path);
+}
+
+function packageEntries(value: unknown, settingsPath: string): PackageEntry[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry): PackageEntry[] => {
+    if (typeof entry === "string") return [{ source: parsePiSource(entry, dirname(settingsPath)) }];
+    if (entry === null || typeof entry !== "object" || typeof (entry as { source?: unknown }).source !== "string") return [];
+    const packageEntry = entry as { source: string; skills?: unknown; extensions?: unknown };
+    return [{
+      source: parsePiSource(packageEntry.source, dirname(settingsPath)),
+      skills: stringArray(packageEntry.skills),
+      extensions: stringArray(packageEntry.extensions),
+    }];
+  });
 }
 
 function stringValues(value: unknown): string[] {

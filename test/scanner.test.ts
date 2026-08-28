@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { locationsFor, updateSettingsArray } from "../src/settings.js";
 import { scanPi } from "../src/scanner.js";
 import { makeTempDir } from "./helpers.js";
@@ -116,4 +116,85 @@ test("deduplicates a configured extension already found in its documented direct
   const canonicalExtensionPath = await realpath(extensionPath);
 
   assert.equal(scan.extensions.filter((resource) => resource.installedPath === canonicalExtensionPath).length, 1);
+});
+
+test("prefers a local package and its derived resources over the global package", async () => {
+  const root = await makeTempDir(); const agentDir = join(root, "agent"); const projectRoot = join(root, "project");
+  const globalPackage = join(agentDir, "npm", "shared-tools");
+  const localPackage = join(projectRoot, ".pi", "npm", "shared-tools");
+  await mkdir(join(globalPackage, "skills", "global-skill"), { recursive: true });
+  await mkdir(join(localPackage, "skills", "local-skill"), { recursive: true });
+  await writeFile(join(globalPackage, "skills", "global-skill", "SKILL.md"), "---\nname: global-skill\ndescription: Global\n---\n");
+  await writeFile(join(localPackage, "skills", "local-skill", "SKILL.md"), "---\nname: local-skill\ndescription: Local\n---\n");
+  await writeFile(join(agentDir, "settings.json"), JSON.stringify({ packages: ["npm:shared-tools"] }));
+  await writeFile(join(projectRoot, ".pi", "settings.json"), JSON.stringify({ packages: ["npm:shared-tools"] }));
+
+  const scan = await scanPi({ agentDir, projectRoot });
+
+  assert.deepEqual(scan.packages.filter((resource) => resource.name === "shared-tools").map((resource) => resource.scope), ["local"]);
+  assert.equal(scan.skills.find((resource) => resource.name === "global-skill"), undefined);
+  assert.equal(scan.skills.find((resource) => resource.name === "local-skill")?.scope, "local");
+});
+
+test("scans bare npm, settings-relative local, and SSH git package sources", async () => {
+  const root = await makeTempDir(); const agentDir = join(root, "agent"); const projectRoot = join(root, "project");
+  const localPackage = join(projectRoot, ".pi", "packages", "local-tools");
+  await mkdir(localPackage, { recursive: true });
+  await mkdir(agentDir, { recursive: true });
+  await writeFile(join(agentDir, "settings.json"), JSON.stringify({ packages: ["pi-skills", "git:git@github.com:user/repo"] }));
+  await mkdir(join(projectRoot, ".pi"), { recursive: true });
+  await writeFile(join(projectRoot, ".pi", "settings.json"), JSON.stringify({ packages: ["./packages/local-tools"] }));
+
+  const scan = await scanPi({ agentDir, projectRoot });
+
+  assert.equal(scan.packages.find((resource) => resource.source.spec === "pi-skills")?.source.kind, "npm");
+  assert.equal(scan.packages.find((resource) => resource.source.kind === "local-path")?.installedPath, await realpath(localPackage));
+  assert.equal(scan.packages.find((resource) => resource.source.spec === "git:git@github.com:user/repo")?.installedPath, join(agentDir, "git", "github.com", "user", "repo"));
+});
+
+test("scans object package entries using their skill and extension filters", async () => {
+  const root = await makeTempDir(); const agentDir = join(root, "agent");
+  const packageRoot = join(agentDir, "npm", "object-tools");
+  await mkdir(join(packageRoot, "selected-skill"), { recursive: true });
+  await mkdir(join(packageRoot, "selected-extension"), { recursive: true });
+  await writeFile(join(packageRoot, "selected-skill", "SKILL.md"), "---\nname: selected-skill\ndescription: Selected\n---\n");
+  await writeFile(join(packageRoot, "selected-extension", "tool.ts"), "export default () => {};");
+  await writeFile(join(agentDir, "settings.json"), JSON.stringify({ packages: [{
+    source: "npm:object-tools", skills: ["selected-skill"], extensions: ["selected-extension/tool.ts"],
+  }] }));
+
+  const scan = await scanPi({ agentDir });
+
+  assert.equal(scan.packages.find((resource) => resource.name === "object-tools")?.source.spec, "npm:object-tools");
+  assert.equal(scan.skills.find((resource) => resource.name === "selected-skill")?.ownerPackageId, "package:npm:object-tools");
+  assert.equal(scan.extensions.find((resource) => resource.name === "tool")?.ownerPackageId, "package:npm:object-tools");
+});
+
+test("ignores root Markdown but discovers nested Markdown in .agents skills", async () => {
+  const root = await makeTempDir(); const projectRoot = join(root, "project");
+  const agentsSkills = join(projectRoot, ".agents", "skills");
+  await mkdir(join(agentsSkills, "group"), { recursive: true });
+  await writeFile(join(agentsSkills, "ignored.md"), "---\nname: ignored-root\ndescription: Ignored\n---\n");
+  await writeFile(join(agentsSkills, "group", "nested.md"), "---\nname: nested-group\ndescription: Nested\n---\n");
+
+  const scan = await scanPi({ agentDir: join(root, "agent"), projectRoot });
+
+  assert.equal(scan.skills.find((resource) => resource.name === "ignored-root"), undefined);
+  assert.equal(scan.skills.find((resource) => resource.name === "nested-group")?.scope, "local");
+});
+
+test("expands home-relative configured extension paths", async () => {
+  const root = await makeTempDir(); const agentDir = join(root, "agent");
+  const homeFixture = await mkdtemp(join(homedir(), "pi-collection-"));
+  const extensionPath = join(homeFixture, "configured.ts");
+  await mkdir(agentDir, { recursive: true });
+  await writeFile(extensionPath, "export default () => {};");
+  await writeFile(join(agentDir, "settings.json"), JSON.stringify({ extensions: [`~/${basename(homeFixture)}/configured.ts`] }));
+
+  try {
+    const scan = await scanPi({ agentDir });
+    assert.equal(scan.extensions.find((resource) => resource.name === "configured")?.installedPath, await realpath(extensionPath));
+  } finally {
+    await rm(homeFixture, { recursive: true, force: true });
+  }
 });

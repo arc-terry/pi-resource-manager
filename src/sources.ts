@@ -4,8 +4,8 @@ import type { GitSource, NpmSource, Source } from "./domain.js";
 
 export class SourceParseError extends Error {}
 
-export function parsePiSource(input: string): Source {
-  if (input.startsWith("npm:")) {
+export function parsePiSource(input: string, baseDir?: string): Source {
+  if (input.startsWith("npm:") || isBareNpmSpec(input)) {
     return parseNpmSource(input);
   }
 
@@ -18,7 +18,7 @@ export function parsePiSource(input: string): Source {
   }
 
   if (isAbsolute(input) || input.startsWith("./") || input.startsWith("../")) {
-    return { kind: "local-path", path: resolveLocalPath(input) };
+    return { kind: "local-path", path: resolveLocalPath(input, baseDir) };
   }
 
   throw new SourceParseError(`Pi-supported source required: ${input}`);
@@ -36,7 +36,7 @@ export function sourceIdentity(source: Source): string {
 }
 
 function parseNpmSource(spec: string): NpmSource {
-  const packageSpec = spec.slice("npm:".length);
+  const packageSpec = spec.startsWith("npm:") ? spec.slice("npm:".length) : spec;
   const versionSeparator = packageSpec.lastIndexOf("@");
 
   if (versionSeparator > 0) {
@@ -78,7 +78,11 @@ function gitRefSeparator(url: string): number {
   return refSeparator > repositoryStart ? refSeparator : -1;
 }
 
-function resolveLocalPath(path: string): string {
-  const resolvedPath = resolve(path);
+function isBareNpmSpec(input: string): boolean {
+  return /^(?:@[\w.-]+\/)?[\w.-]+(?:@[\w.*+~^<>=|-]+)?$/.test(input);
+}
+
+function resolveLocalPath(path: string, baseDir?: string): string {
+  const resolvedPath = resolve(baseDir ?? ".", path);
   return existsSync(resolvedPath) ? realpathSync(resolvedPath) : resolvedPath;
 }
