@@ -1,6 +1,6 @@
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, extname, join, resolve } from "node:path";
+import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import type { Resource, Scope, Source } from "./domain.js";
 import { defaultAgentDir, locationsFor, readSettings, type PiLocations } from "./settings.js";
@@ -27,6 +27,12 @@ interface PackageEntry {
   source: Source;
   skills?: string[];
   extensions?: string[];
+}
+
+interface PackageResourceFilter {
+  additions: string[];
+  matches(resource: Resource): boolean;
+  forceIncludes(resource: Resource): boolean;
 }
 
 interface LoadedScope extends ScanScope {
@@ -133,14 +139,26 @@ async function scanPackageResources(
   seen: Set<string>,
 ): Promise<void> {
   const pi = await packagePiConfig(resource.installedPath);
-  const skillPaths = entry.skills ?? pi?.skills ?? [join(resource.installedPath, "skills")];
-  const extensionPaths = entry.extensions ?? pi?.extensions ?? [join(resource.installedPath, "extensions")];
+  const skillPaths = pi?.skills ?? [join(resource.installedPath, "skills")];
+  const extensionPaths = pi?.extensions ?? [join(resource.installedPath, "extensions")];
+  const skillFilter = entry.skills === undefined ? undefined : packageResourceFilter(entry.skills, resource.installedPath);
+  const extensionFilter = entry.extensions === undefined ? undefined : packageResourceFilter(entry.extensions, resource.installedPath);
 
   for (const skillPath of skillPaths) {
-    await scanSkills(packagePathEntry(resource.installedPath, skillPath), resource, scanScope, result, seen, standardSkillDiscovery);
+    await scanSkills(packagePathEntry(resource.installedPath, skillPath), resource, scanScope, result, seen, standardSkillDiscovery, skillFilter?.matches);
+  }
+  if (skillFilter) {
+    for (const skillPath of skillFilter.additions) {
+      await scanSkills(packagePathEntry(resource.installedPath, skillPath), resource, scanScope, result, seen, standardSkillDiscovery, skillFilter.forceIncludes);
+    }
   }
   for (const extensionPath of extensionPaths) {
-    await scanExtensions(packagePathEntry(resource.installedPath, extensionPath), resource, scanScope, result, seen);
+    await scanExtensions(packagePathEntry(resource.installedPath, extensionPath), resource, scanScope, result, seen, extensionFilter?.matches);
+  }
+  if (extensionFilter) {
+    for (const extensionPath of extensionFilter.additions) {
+      await scanExtensions(packagePathEntry(resource.installedPath, extensionPath), resource, scanScope, result, seen, extensionFilter.forceIncludes);
+    }
   }
 }
 
@@ -167,11 +185,12 @@ async function scanSkills(
   result: ScanResult,
   seen: Set<string>,
   discovery: SkillDiscoveryOptions,
+  accept: (resource: Resource) => boolean = () => true,
 ): Promise<void> {
   for (const skill of await findSkills(path, discovery)) {
     const installedPath = await canonicalPath(skill.installedPath);
     const source = owner?.source ?? { kind: "local-path" as const, path: installedPath };
-    add(result.skills, {
+    const resource: Resource = {
       id: owner ? `skill:${owner.id}:${installedPath}` : `skill:${installedPath}`,
       type: "skill",
       name: skill.name,
@@ -180,7 +199,8 @@ async function scanSkills(
       installedPath,
       ...(scanScope.projectRoot ? { projectRoot: scanScope.projectRoot } : {}),
       ...(owner ? { ownerPackageId: owner.id } : {}),
-    }, seen);
+    };
+    if (accept(resource)) add(result.skills, resource, seen);
   }
 }
 
@@ -190,11 +210,12 @@ async function scanExtensions(
   scanScope: ScanScope,
   result: ScanResult,
   seen: Set<string>,
+  accept: (resource: Resource) => boolean = () => true,
 ): Promise<void> {
   for (const extension of await findExtensions(path)) {
     const installedPath = await canonicalPath(extension);
     const source = owner?.source ?? { kind: "local-path" as const, path: installedPath };
-    add(result.extensions, {
+    const resource: Resource = {
       id: owner ? `extension:${owner.id}:${installedPath}` : `extension:${installedPath}`,
       type: "extension",
       name: extensionName(installedPath),
@@ -203,7 +224,8 @@ async function scanExtensions(
       installedPath,
       ...(scanScope.projectRoot ? { projectRoot: scanScope.projectRoot } : {}),
       ...(owner ? { ownerPackageId: owner.id } : {}),
-    }, seen);
+    };
+    if (accept(resource)) add(result.extensions, resource, seen);
   }
 }
 
@@ -284,6 +306,56 @@ function add(resources: Resource[], resource: Resource, seen: Set<string>): void
   }
 }
 
+function packageResourceFilter(filters: string[], packageRoot: string): PackageResourceFilter {
+  const additions = filters.filter((filter) => filter.startsWith("+")).map((filter) => filter.slice(1));
+  const exactExclusions = filters.filter((filter) => filter.startsWith("-")).map((filter) => normalizeFilterPath(filter.slice(1)));
+  const globExclusions = filters.filter((filter) => filter.startsWith("!")).map((filter) => filter.slice(1));
+  const selections = filters.filter((filter) => !/^[!+-]/.test(filter));
+
+  const isExcluded = (resource: Resource) => {
+    const path = packageRelativePath(resource, packageRoot);
+    return exactExclusions.includes(path) || globExclusions.some((filter) => globMatches(filter, path));
+  };
+  return {
+    additions,
+    matches: (resource) => filters.length > 0 && !isExcluded(resource)
+      && (selections.length === 0 || selections.some((filter) => filterMatches(filter, resource, packageRoot))),
+    forceIncludes: (resource) => !exactExclusions.includes(packageRelativePath(resource, packageRoot)),
+  };
+}
+
+function filterMatches(filter: string, resource: Resource, packageRoot: string): boolean {
+  return globMatches(filter, packageRelativePath(resource, packageRoot)) || globMatches(filter, resource.name);
+}
+
+function packageRelativePath(resource: Resource, packageRoot: string): string {
+  return relative(packageRoot, resource.installedPath).split("\\").join("/");
+}
+
+function normalizeFilterPath(path: string): string {
+  return path.replace(/^\.\//, "").split("\\").join("/");
+}
+
+function globMatches(pattern: string, value: string): boolean {
+  let expression = "^";
+  for (let index = 0; index < pattern.length; index += 1) {
+    const character = pattern[index];
+    if (character === "*") {
+      if (pattern[index + 1] === "*") {
+        expression += ".*";
+        index += 1;
+      } else {
+        expression += "[^/]*";
+      }
+    } else if (character === "?") {
+      expression += "[^/]";
+    } else {
+      expression += character.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
+    }
+  }
+  return new RegExp(`${expression}$`).test(value);
+}
+
 async function packagePath(source: Source, packageDirs: string[]): Promise<string> {
   if (source.kind === "local-path") return canonicalPath(source.path);
   const root = source.kind === "npm"
@@ -293,9 +365,10 @@ async function packagePath(source: Source, packageDirs: string[]): Promise<strin
 }
 
 function gitDirectory(url: string): string {
-  const sshMatch = /^(?:[^@]+@)?([^:]+):(.+)$/.exec(url);
+  const normalizedUrl = url.replace(/^[a-z]+:\/\//, "");
+  const sshMatch = /^(?:[^@/]+@)?([^:]+):(.+)$/.exec(normalizedUrl);
   if (sshMatch) return join(sshMatch[1], sshMatch[2]);
-  return url.replace(/^[a-z]+:\/\//, "");
+  return normalizedUrl.replace(/^[^@/]+@/, "");
 }
 
 function packageName(source: Source): string {

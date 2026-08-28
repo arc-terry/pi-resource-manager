@@ -152,22 +152,43 @@ test("scans bare npm, settings-relative local, and SSH git package sources", asy
   assert.equal(scan.packages.find((resource) => resource.source.spec === "git:git@github.com:user/repo")?.installedPath, join(agentDir, "git", "github.com", "user", "repo"));
 });
 
-test("scans object package entries using their skill and extension filters", async () => {
+test("applies package object glob, exclusion, force-include, and force-exclude filters", async () => {
   const root = await makeTempDir(); const agentDir = join(root, "agent");
   const packageRoot = join(agentDir, "npm", "object-tools");
-  await mkdir(join(packageRoot, "selected-skill"), { recursive: true });
-  await mkdir(join(packageRoot, "selected-extension"), { recursive: true });
-  await writeFile(join(packageRoot, "selected-skill", "SKILL.md"), "---\nname: selected-skill\ndescription: Selected\n---\n");
-  await writeFile(join(packageRoot, "selected-extension", "tool.ts"), "export default () => {};");
+  await mkdir(join(packageRoot, "skills", "wanted"), { recursive: true });
+  await mkdir(join(packageRoot, "skills", "legacy"), { recursive: true });
+  await mkdir(join(packageRoot, "skills", "removed"), { recursive: true });
+  await mkdir(join(packageRoot, "manual-skill"), { recursive: true });
+  await mkdir(join(packageRoot, "extensions"), { recursive: true });
+  await writeFile(join(packageRoot, "package.json"), JSON.stringify({ pi: { skills: ["skills"], extensions: ["extensions"] } }));
+  await writeFile(join(packageRoot, "skills", "wanted", "SKILL.md"), "---\nname: wanted\ndescription: Wanted\n---\n");
+  await writeFile(join(packageRoot, "skills", "legacy", "SKILL.md"), "---\nname: legacy\ndescription: Legacy\n---\n");
+  await writeFile(join(packageRoot, "skills", "removed", "SKILL.md"), "---\nname: removed\ndescription: Removed\n---\n");
+  await writeFile(join(packageRoot, "manual-skill", "SKILL.md"), "---\nname: manual-skill\ndescription: Manual\n---\n");
+  await writeFile(join(packageRoot, "extensions", "current.ts"), "export default () => {};");
+  await writeFile(join(packageRoot, "extensions", "legacy.ts"), "export default () => {};");
+  await writeFile(join(packageRoot, "extensions", "removed.ts"), "export default () => {};");
+  await writeFile(join(packageRoot, "manual.ts"), "export default () => {};");
   await writeFile(join(agentDir, "settings.json"), JSON.stringify({ packages: [{
-    source: "npm:object-tools", skills: ["selected-skill"], extensions: ["selected-extension/tool.ts"],
+    source: "npm:object-tools",
+    skills: ["skills/*", "!skills/legacy", "+manual-skill", "-skills/removed"],
+    extensions: ["extensions/*.ts", "!extensions/legacy.ts", "+manual.ts", "-extensions/removed.ts"],
   }] }));
 
   const scan = await scanPi({ agentDir });
 
-  assert.equal(scan.packages.find((resource) => resource.name === "object-tools")?.source.spec, "npm:object-tools");
-  assert.equal(scan.skills.find((resource) => resource.name === "selected-skill")?.ownerPackageId, "package:npm:object-tools");
-  assert.equal(scan.extensions.find((resource) => resource.name === "tool")?.ownerPackageId, "package:npm:object-tools");
+  assert.deepEqual(scan.skills.filter((resource) => resource.ownerPackageId === "package:npm:object-tools").map((resource) => resource.name), ["wanted", "manual-skill"]);
+  assert.deepEqual(scan.extensions.filter((resource) => resource.ownerPackageId === "package:npm:object-tools").map((resource) => resource.name), ["current", "manual"]);
+});
+
+test("maps URL-style SSH packages to Pi's git host directory", async () => {
+  const root = await makeTempDir(); const agentDir = join(root, "agent");
+  await mkdir(agentDir, { recursive: true });
+  await writeFile(join(agentDir, "settings.json"), JSON.stringify({ packages: ["ssh://git@github.com/user/repo"] }));
+
+  const scan = await scanPi({ agentDir });
+
+  assert.equal(scan.packages[0]?.installedPath, join(agentDir, "git", "github.com", "user", "repo"));
 });
 
 test("ignores root Markdown but discovers nested Markdown in .agents skills", async () => {
