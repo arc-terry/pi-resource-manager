@@ -12,26 +12,35 @@ import {
 } from "../src/collection.js";
 import { makeTempDir } from "./helpers.js";
 
-test("schema-v2 collection round-trips and merges matching scan and manual packages without duplication", async () => {
+const schemaBase = {
+  schemaVersion: 2,
+  collection: { name: "workstation", updatedAt: "2026-08-29T00:00:00.000Z" },
+};
+
+test("creates an empty schema-v2 collection", () => {
+  assert.deepEqual(emptyCollection("workstation", new Date("2026-08-29T00:00:00Z")), {
+    ...schemaBase,
+    resources: [],
+  });
+});
+
+test("schema-v2 collection round-trips through YAML", async () => {
   const path = join(await makeTempDir(), "pi-collection.yml");
   const collection = emptyCollection("workstation", new Date("2026-08-29T00:00:00Z"));
 
-  assert.deepEqual(collection, {
-    schemaVersion: 2,
-    collection: { name: "workstation", updatedAt: "2026-08-29T00:00:00.000Z" },
-    resources: [],
-  });
   await writeCollectionAtomic(path, collection);
+
   assert.deepEqual(await readCollection(path), collection);
+});
 
-  const legacyPath = join(await makeTempDir(), "old.yml");
-  await writeFile(legacyPath, "schemaVersion: 1\npackages: []\n");
-  await assert.rejects(readCollection(legacyPath), /schemaVersion/);
+test("rejects legacy schema version one", async () => {
+  const path = join(await makeTempDir(), "old.yml");
+  await writeFile(path, "schemaVersion: 1\npackages: []\n");
 
-  const schemaBase = {
-    schemaVersion: 2,
-    collection: { name: "workstation", updatedAt: "2026-08-29T00:00:00.000Z" },
-  };
+  await assert.rejects(readCollection(path), /schemaVersion/);
+});
+
+test("rejects collection resources with invalid cross-field values", () => {
   assert.throws(() => collectionSchema.parse({
     ...schemaBase,
     resources: [{
@@ -56,7 +65,9 @@ test("schema-v2 collection round-trips and merges matching scan and manual packa
       source: { kind: "npm", spec: "npm:local", name: "local" },
     }],
   }), /local scanned resources require projectRoot/);
+});
 
+test("merges matching scan and manual packages without duplication", () => {
   const base = {
     ...emptyCollection("x", new Date("2026-08-29T00:00:00Z")),
     resources: [{
@@ -75,6 +86,7 @@ test("schema-v2 collection round-trips and merges matching scan and manual packa
   };
 
   const merged = mergeCollection(base, resourcesFromScan(scan), "2026-08-29T01:00:00.000Z");
+
   assert.equal(merged.resources.length, 1);
   assert.deepEqual(merged.resources[0]?.origins, ["scan", "manual"]);
   assert.equal(merged.resources[0]?.installedPath, "/agent/npm/tools");
