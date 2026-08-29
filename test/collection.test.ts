@@ -90,4 +90,59 @@ test("merges matching scan and manual packages without duplication", () => {
   assert.equal(merged.resources.length, 1);
   assert.deepEqual(merged.resources[0]?.origins, ["scan", "manual"]);
   assert.equal(merged.resources[0]?.installedPath, "/agent/npm/tools");
+  assert.deepEqual(merged.resources[0]?.source, scan.packages[0]?.source);
+});
+
+test("normalizes duplicate base identities without incoming resources", () => {
+  const base = {
+    ...emptyCollection("x", new Date("2026-08-29T00:00:00Z")),
+    resources: [
+      {
+        id: "package:npm:tools", type: "package" as const, name: "tools",
+        origins: ["manual" as const], scope: "global" as const,
+        source: { kind: "npm" as const, spec: "npm:tools", name: "tools" },
+      },
+      {
+        id: "package:npm:tools", type: "package" as const, name: "tools",
+        origins: ["scan" as const], scope: "global" as const, installedPath: "/agent/npm/tools",
+        source: { kind: "npm" as const, spec: "npm:tools@1.2.3", name: "tools", version: "1.2.3" },
+      },
+    ],
+  };
+
+  const merged = mergeCollection(base, [], "2026-08-29T01:00:00.000Z");
+
+  assert.equal(merged.resources.length, 1);
+  assert.deepEqual(merged.resources[0]?.origins, ["scan", "manual"]);
+  assert.deepEqual(merged.resources[0]?.source, {
+    kind: "npm", spec: "npm:tools@1.2.3", name: "tools", version: "1.2.3",
+  });
+});
+
+test("scan refresh clears stale observed project roots", () => {
+  const base = {
+    ...emptyCollection("x", new Date("2026-08-29T00:00:00Z")),
+    resources: [{
+      id: "package:npm:tools", type: "package" as const, name: "tools",
+      origins: ["scan" as const], scope: "local" as const,
+      installedPath: "/old/.pi/npm/tools", projectRoot: "/old",
+      source: { kind: "npm" as const, spec: "npm:tools@1.0.0", name: "tools", version: "1.0.0" },
+    }],
+  };
+  const scan = {
+    packages: [{
+      id: "package:npm:tools", type: "package" as const, name: "tools",
+      scope: "global" as const, installedPath: "/agent/npm/tools",
+      source: { kind: "npm" as const, spec: "npm:tools@2.0.0", name: "tools", version: "2.0.0" },
+    }],
+    skills: [], extensions: [],
+  };
+
+  const merged = mergeCollection(base, resourcesFromScan(scan), "2026-08-29T01:00:00.000Z");
+
+  assert.deepEqual(merged.resources[0], {
+    id: "package:npm:tools", type: "package", name: "tools", origins: ["scan"],
+    scope: "global", installedPath: "/agent/npm/tools",
+    source: { kind: "npm", spec: "npm:tools@2.0.0", name: "tools", version: "2.0.0" },
+  });
 });

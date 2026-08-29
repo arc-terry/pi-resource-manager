@@ -107,9 +107,9 @@ export function mergeCollection(
   incoming: CollectionResource[],
   updatedAt = new Date().toISOString(),
 ): Collection {
-  const resources = [...base.resources];
-  const indexes = new Map(resources.map((resource, index) => [collectionResourceIdentity(resource), index]));
-  for (const candidate of incoming) {
+  const resources: CollectionResource[] = [];
+  const indexes = new Map<string, number>();
+  for (const candidate of [...base.resources, ...incoming]) {
     const key = collectionResourceIdentity(candidate);
     const index = indexes.get(key);
     if (index === undefined) {
@@ -120,7 +120,8 @@ export function mergeCollection(
     const existing = resources[index]!;
     const origins = (["scan", "manual"] as Origin[])
       .filter((origin) => existing.origins.includes(origin) || candidate.origins.includes(origin));
-    resources[index] = { ...existing, ...candidate, origins };
+    const preferred = candidate.origins.includes("scan") || !existing.origins.includes("scan") ? candidate : existing;
+    resources[index] = { ...preferred, origins };
   }
   return collectionSchema.parse({ ...base, collection: { ...base.collection, updatedAt }, resources });
 }
