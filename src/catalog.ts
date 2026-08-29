@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
 import type { Resource } from "./domain.js";
@@ -18,7 +19,7 @@ export const catalogSchema = z.object({
   entries: z.array(catalogEntrySchema),
 });
 
-export type Catalog = z.infer<typeof catalogSchema>;
+export type Catalog = z.infer<typeof catalogSchema> & { baseDir?: string };
 export type CatalogEntry = z.infer<typeof catalogEntrySchema>;
 
 export interface CatalogStatus {
@@ -29,17 +30,21 @@ export interface CatalogStatus {
 }
 
 export async function loadCatalog(path: string): Promise<Catalog> {
-  const catalog = catalogSchema.parse(YAML.parse(await readFile(path, "utf8")));
-  for (const entry of catalog.entries) parsePiSource(entry.source);
+  const catalog: Catalog = { ...catalogSchema.parse(YAML.parse(await readFile(path, "utf8"))), baseDir: dirname(resolve(path)) };
+  for (const entry of catalog.entries) catalogSource(catalog, entry);
   return catalog;
 }
 
-export function matchCatalog(catalog: Catalog, scan: ScanResult): CatalogStatus[] {
-  return catalog.entries.map((entry) => matchEntry(entry, scan));
+export function catalogSource(catalog: Catalog, entry: CatalogEntry): ReturnType<typeof parsePiSource> {
+  return parsePiSource(entry.source, catalog.baseDir);
 }
 
-function matchEntry(entry: CatalogEntry, scan: ScanResult): CatalogStatus {
-  const identity = sourceIdentity(parsePiSource(entry.source));
+export function matchCatalog(catalog: Catalog, scan: ScanResult): CatalogStatus[] {
+  return catalog.entries.map((entry) => matchEntry(catalog, entry, scan));
+}
+
+function matchEntry(catalog: Catalog, entry: CatalogEntry, scan: ScanResult): CatalogStatus {
+  const identity = sourceIdentity(catalogSource(catalog, entry));
   const pkg = scan.packages.find((candidate) => sourceIdentity(candidate.source) === identity);
   if (!pkg) return { entry, installed: false };
   if (entry.type === "package") return { entry, installed: true, package: pkg };

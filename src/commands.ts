@@ -1,5 +1,5 @@
 import type { Source } from "./domain.js";
-import { type Catalog, type CatalogEntry, type CatalogStatus, loadCatalog, matchCatalog } from "./catalog.js";
+import { catalogSource, type Catalog, type CatalogEntry, type CatalogStatus, loadCatalog, matchCatalog } from "./catalog.js";
 import { confirm, runPi } from "./pi-command.js";
 import { scanPi, type ScanResult } from "./scanner.js";
 import { parsePiSource, sourceIdentity } from "./sources.js";
@@ -24,7 +24,7 @@ interface ScanCommandOptions extends ScanOptions {
   type?: CatalogType;
 }
 
-interface MutationOptions {
+interface MutationOptions extends ScanOptions {
   full?: boolean;
   type?: CatalogType;
   local?: boolean;
@@ -66,8 +66,8 @@ export async function installCatalogEntries(
   options: MutationOptions,
   deps: CommandDependencies = {},
 ): Promise<CatalogCommandSummary> {
-  const entries = await selectedEntries(names, options, deps);
-  return executeEntries(entries, "install", options, deps);
+  const catalog = await catalogFor(deps);
+  return executeEntries(catalog, selectEntries(catalog.entries, names, options), "install", options, deps);
 }
 
 export async function removeCatalogEntries(
@@ -76,11 +76,11 @@ export async function removeCatalogEntries(
   deps: CommandDependencies = {},
 ): Promise<CatalogCommandSummary> {
   const catalog = await catalogFor(deps);
-  const scan = await scanFor({}, deps);
+  const scan = await scanFor(options, deps);
   const statuses = matchCatalog(catalog, scan);
   const selected = selectEntries(statuses.map((status) => status.entry), names, options);
   const scopes = new Map(statuses.map((status) => [status.entry, status.package?.scope]));
-  return executeEntries(selected, "remove", options, deps, (entry) => scopes.get(entry) === "local");
+  return executeEntries(catalog, selected, "remove", options, deps, (entry) => scopes.get(entry) === "local");
 }
 
 export async function addSource(sourceText: string, options: AddOptions, deps: CommandDependencies = {}): Promise<AddResult> {
@@ -106,23 +106,20 @@ export async function addSource(sourceText: string, options: AddOptions, deps: C
   return { source, validation: "passed" };
 }
 
-async function selectedEntries(names: string[], options: MutationOptions, deps: CommandDependencies): Promise<CatalogEntry[]> {
-  return selectEntries((await catalogFor(deps)).entries, names, options);
-}
-
 function selectEntries(entries: CatalogEntry[], names: string[], options: Pick<MutationOptions, "full" | "type">): CatalogEntry[] {
   const selected = options.full ? entries : entries.filter((entry) => names.includes(entry.name));
   return options.type ? selected.filter((entry) => entry.type === options.type) : selected;
 }
 
 async function executeEntries(
+  catalog: Catalog,
   entries: CatalogEntry[],
   command: "install" | "remove",
   options: MutationOptions,
   deps: CommandDependencies,
   isLocal: (entry: CatalogEntry) => boolean = () => false,
 ): Promise<CatalogCommandSummary> {
-  const actions = uniqueSources(entries).map((entry) => ({ entry, source: parsePiSource(entry.source) }));
+  const actions = uniqueSources(catalog, entries).map((entry) => ({ entry, source: catalogSource(catalog, entry) }));
   if (actions.length === 0) return { requested: 0, completed: 0, skipped: 0 };
   if (options.dryRun) return { requested: actions.length, completed: 0, skipped: actions.length };
   if (!await confirm(`${command === "install" ? "Install" : "Remove"} selected Pi catalog entries?`, options)) {
@@ -135,10 +132,10 @@ async function executeEntries(
   return { requested: actions.length, completed: actions.length, skipped: 0 };
 }
 
-function uniqueSources(entries: CatalogEntry[]): CatalogEntry[] {
+function uniqueSources(catalog: Catalog, entries: CatalogEntry[]): CatalogEntry[] {
   const seen = new Set<string>();
   return entries.filter((entry) => {
-    const identity = sourceIdentity(parsePiSource(entry.source));
+    const identity = sourceIdentity(catalogSource(catalog, entry));
     if (seen.has(identity)) return false;
     seen.add(identity);
     return true;

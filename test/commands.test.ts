@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import test from "node:test";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Readable, Writable } from "node:stream";
 import { addSource, installCatalogEntries, listCollection, removeCatalogEntries } from "../src/commands.js";
 import { loadCatalog, matchCatalog } from "../src/catalog.js";
@@ -42,6 +42,7 @@ test("loads a schema-versioned catalog", async () => {
   assert.deepEqual(await loadCatalog(file), {
     schemaVersion: 1,
     entries: [{ name: "tools", type: "package", source: "npm:tools" }],
+    baseDir: dirname(file),
   });
 });
 
@@ -115,6 +116,48 @@ test("removes a locally installed catalog source with Pi local scope", async () 
 
   assert.deepEqual(result, { requested: 1, completed: 1, skipped: 0 });
   assert.equal(await readFile(log, "utf8"), "remove -l npm:tools\n");
+});
+
+test("removes a local catalog package after scanning the requested project", async () => {
+  const { path, log } = await createFakePi(await makeTempDir());
+  const scanCalls: Array<{ agentDir?: string; projectRoot?: string }> = [];
+  const localScan = {
+    packages: [{ id: "package:npm:tools", type: "package" as const, name: "tools", scope: "local" as const, source: { kind: "npm" as const, spec: "npm:tools", name: "tools" }, installedPath: "/project/.pi/npm/tools", projectRoot: "/project" }],
+    skills: [],
+    extensions: [],
+  };
+  const scan = async (options: { agentDir?: string; projectRoot?: string }) => {
+    scanCalls.push(options);
+    return options.projectRoot === "/project" ? localScan : emptyScan;
+  };
+
+  const result = await removeCatalogEntries(
+    ["tools"],
+    { yes: true, agentDir: "/agent", projectRoot: "/project" },
+    { catalog, scan, piPath: path },
+  );
+
+  assert.deepEqual(scanCalls, [{ agentDir: "/agent", projectRoot: "/project" }]);
+  assert.deepEqual(result, { requested: 1, completed: 1, skipped: 0 });
+  assert.equal(await readFile(log, "utf8"), "remove -l npm:tools\n");
+});
+
+test("resolves relative local catalog sources from the catalog directory for matching and install", async () => {
+  const catalogDir = await makeTempDir();
+  const catalogPath = join(catalogDir, "catalog.yml");
+  const localSource = join(catalogDir, "tools");
+  await writeFile(catalogPath, "schemaVersion: 1\nentries:\n  - name: tools\n    type: package\n    source: ./tools\n");
+  const loadedCatalog = await loadCatalog(catalogPath);
+  const scan = {
+    packages: [{ id: `package:local:${localSource}`, type: "package" as const, name: "tools", scope: "global" as const, source: { kind: "local-path" as const, path: localSource }, installedPath: "/agent/tools" }],
+    skills: [],
+    extensions: [],
+  };
+  const { path, log } = await createFakePi(await makeTempDir());
+
+  assert.equal(matchCatalog(loadedCatalog, scan).at(0)?.installed, true);
+  await installCatalogEntries(["tools"], { yes: true }, { catalog: loadedCatalog, scan: async () => scan, piPath: path });
+  assert.equal(await readFile(log, "utf8"), `install ${localSource}\n`);
 });
 
 test("adds only a source that supplies the requested skill", async () => {
