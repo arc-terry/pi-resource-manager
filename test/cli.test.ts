@@ -119,6 +119,52 @@ test("does not fail when cli is imported from stdin", async () => {
   assert.equal(result.code, 0);
 });
 
+test("list combines catalog rows with profile-only resources", async () => {
+  const cwd = await makeTempDir();
+  const agentDir = join(cwd, "agent");
+  await writeCatalog(cwd);
+  await writeAgent(agentDir);
+  await writeFile(join(cwd, "pi-profile.yml"), `schemaVersion: 1
+profile:
+  name: saved
+  generatedAt: 2026-08-25T00:00:00.000Z
+  pi:
+    agentDirectory: ${agentDir}
+packages:
+  - id: package:npm:tools
+    name: tools
+    scope: global
+    installedPath: ${agentDir}/npm/tools
+    source:
+      kind: npm
+      spec: npm:tools
+      name: tools
+skills:
+  - id: skill:saved-review
+    name: saved-review
+    scope: global
+    installedPath: ${agentDir}/skills/saved-review
+    source:
+      kind: local-path
+      path: ${agentDir}/skills/saved-review
+extensions:
+  - id: extension:saved-plugin
+    name: saved-plugin
+    scope: global
+    installedPath: ${agentDir}/extensions/saved-plugin.ts
+    source:
+      kind: local-path
+      path: ${agentDir}/extensions/saved-plugin.ts
+`);
+
+  const result = await runCli(["list"], { cwd, env: { PI_CODING_AGENT_DIR: agentDir } });
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /\[ \] package tools/);
+  assert.match(result.stdout, /\[ \] skill saved-review/);
+  assert.match(result.stdout, /\[ \] plugin saved-plugin/);
+  assert.equal((result.stdout.match(/package tools/g) ?? []).length, 1);
+});
+
 test("list filters types, renders full details, and emits JSON without prose", async () => {
   const cwd = await makeTempDir();
   const agentDir = join(cwd, "agent");

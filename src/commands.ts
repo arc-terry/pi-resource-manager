@@ -1,5 +1,6 @@
-import type { Source } from "./domain.js";
+import type { Resource, Source } from "./domain.js";
 import { catalogSource, type Catalog, type CatalogEntry, type CatalogStatus, loadCatalog, matchCatalog } from "./catalog.js";
+import { readProfile, type Profile, type ProfileEntry } from "./profile.js";
 import { confirm, runPi } from "./pi-command.js";
 import { scanPi, type ScanResult } from "./scanner.js";
 import { parsePiSource, sourceIdentity } from "./sources.js";
@@ -14,6 +15,8 @@ interface ScanOptions {
 export interface CommandDependencies {
   catalog?: Catalog;
   catalogPath?: string;
+  profile?: Profile;
+  profilePath?: string;
   scan?: (options: ScanOptions) => Promise<ScanResult>;
   piPath?: string;
   env?: NodeJS.ProcessEnv;
@@ -22,6 +25,7 @@ export interface CommandDependencies {
 
 interface ScanCommandOptions extends ScanOptions {
   type?: CatalogType;
+  profilePath?: string;
 }
 
 interface MutationOptions extends ScanOptions {
@@ -57,8 +61,80 @@ export interface AddResult {
 }
 
 export async function listCollection(options: ScanCommandOptions = {}, deps: CommandDependencies = {}): Promise<CatalogStatus[]> {
-  const statuses = matchCatalog(await catalogFor(deps), await scanFor(options, deps));
-  return options.type ? statuses.filter((status) => status.entry.type === options.type) : statuses;
+  const catalog = await catalogFor(deps);
+  const scan = await scanFor(options, deps);
+  const statuses = matchCatalog(catalog, scan);
+  const profilePath = options.profilePath ?? deps.profilePath;
+  const profile = deps.profile ?? (profilePath ? await profileFor(profilePath, deps) : undefined);
+  const merged = profile ? mergeProfileStatuses(statuses, profile, scan) : statuses;
+  return options.type ? merged.filter((status) => status.entry.type === options.type) : merged;
+}
+
+async function profileFor(path: string, deps: CommandDependencies): Promise<Profile | undefined> {
+  if (deps.profile) return deps.profile;
+  try {
+    return await readProfile(path);
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+function mergeProfileStatuses(statuses: CatalogStatus[], profile: Profile, scan: ScanResult): CatalogStatus[] {
+  const seen = new Set(statuses.map((status) => statusKey(status)));
+  const result = [...statuses];
+  for (const entry of profile.packages) addProfileStatus(result, seen, "package", entry, scan);
+  for (const entry of profile.skills) addProfileStatus(result, seen, "skill", entry, scan);
+  for (const entry of profile.extensions) addProfileStatus(result, seen, "plugin", entry, scan);
+  return result;
+}
+
+function addProfileStatus(
+  result: CatalogStatus[],
+  seen: Set<string>,
+  type: CatalogType,
+  profile: ProfileEntry,
+  scan: ScanResult,
+): void {
+  const status = profileStatus(type, profile, scan);
+  const key = statusKey(status);
+  if (seen.has(key)) return;
+  seen.add(key);
+  result.push(status);
+}
+
+function profileStatus(type: CatalogType, profile: ProfileEntry, scan: ScanResult): CatalogStatus {
+  const resource = type === "package"
+    ? scan.packages.find((candidate) => sourceIdentity(candidate.source) === sourceIdentity(profile.source))
+    : (type === "skill" ? scan.skills : scan.extensions).find((candidate) => profileResourceMatches(candidate, profile));
+  const packageResource = resource?.ownerPackageId
+    ? scan.packages.find((candidate) => candidate.id === resource.ownerPackageId)
+    : resource?.type === "package" ? resource : undefined;
+  return {
+    entry: { name: profile.name, type, source: sourceArgument(profile.source) },
+    installed: resource !== undefined,
+    package: packageResource,
+    resource: resource?.type === "package" ? undefined : resource,
+    profile,
+  };
+}
+
+function profileResourceMatches(resource: Resource, profile: ProfileEntry): boolean {
+  if (profile.ownerPackageId) return resource.ownerPackageId === profile.ownerPackageId && resource.name === profile.name;
+  return resource.name === profile.name && sourceIdentity(resource.source) === sourceIdentity(profile.source);
+}
+
+function statusKey(status: CatalogStatus): string {
+  const type = status.entry.type;
+  if (type === "package") return `package:${sourceIdentity(parseStatusSource(status))}`;
+  if (status.package) return `${type}:${status.package.id}:${status.entry.name}`;
+  return `${type}:${sourceIdentity(parseStatusSource(status))}:${status.entry.name}`;
+}
+
+function parseStatusSource(status: CatalogStatus): Source {
+  if (status.profile) return status.profile.source;
+  if (status.package) return status.package.source;
+  return parsePiSource(status.entry.source);
 }
 
 export async function installCatalogEntries(

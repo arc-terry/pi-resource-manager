@@ -32,9 +32,10 @@ export function buildProgram(deps: CommandDependencies = {}): Command {
     .option("--full", "include source and installation details")
     .option("--type <type>", "package, skill, or plugin")
     .option("--json", "emit catalog status as JSON")
-    .action(async (options: { full?: boolean; type?: string; json?: boolean }) => {
+    .option("--profile <path>", "profile path", "pi-profile.yml")
+    .action(async (options: { full?: boolean; type?: string; json?: boolean; profile?: string }) => {
       const type = publicType(options.type);
-      const statuses = await listCollection({ type }, deps);
+      const statuses = await listCollection({ type, profilePath: options.profile }, deps);
       if (options.json) {
         process.stdout.write(`${JSON.stringify(statuses)}\n`);
         return;
@@ -143,7 +144,15 @@ export function renderChecklist(statuses: CatalogStatus[], full: boolean): strin
     const details = [
       `source: ${status.entry.source}`,
       ...(status.entry.description ? [`description: ${status.entry.description}`] : []),
-      ...(status.package ? [`scope: ${status.package.scope}`, `installedPath: ${status.package.installedPath}`] : []),
+      ...((status.package ?? status.resource ?? status.profile)
+        ? [
+          `scope: ${(status.package ?? status.resource ?? status.profile)!.scope}`,
+          `installedPath: ${(status.package ?? status.resource ?? status.profile)!.installedPath}`,
+          ...((status.package ?? status.resource ?? status.profile)!.projectRoot
+            ? [`projectRoot: ${(status.package ?? status.resource ?? status.profile)!.projectRoot}`]
+            : []),
+        ]
+        : []),
     ];
     return `${line}\n${details.map((detail) => `  ${detail}`).join("\n")}`;
   }).join("\n");

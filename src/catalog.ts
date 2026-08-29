@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
 import type { Resource } from "./domain.js";
+import type { ProfileEntry } from "./profile.js";
 import type { ScanResult } from "./scanner.js";
 import { parsePiSource, sourceIdentity } from "./sources.js";
 
@@ -27,6 +28,7 @@ export interface CatalogStatus {
   installed: boolean;
   package?: Resource;
   resource?: Resource;
+  profile?: ProfileEntry;
 }
 
 export async function loadCatalog(path: string): Promise<Catalog> {
