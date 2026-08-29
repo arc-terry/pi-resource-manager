@@ -244,6 +244,8 @@ test("profile scan defaults its output and profile show prints YAML", async () =
   const scan = await runCli(["profile", "scan"], { cwd, env: { PI_CODING_AGENT_DIR: agentDir } });
   assert.equal(scan.code, 0);
   const profilePath = join(cwd, "pi-profile.yml");
+  assert.match(scan.stdout, /wrote profile: pi-profile\.yml/);
+  assert.match(scan.stdout, /\[v\] package tools/);
   await access(profilePath);
   const profile = await readFile(profilePath, "utf8");
   assert.match(profile, /schemaVersion: 1/);

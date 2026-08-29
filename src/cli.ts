@@ -6,6 +6,7 @@ import YAML from "yaml";
 import { basename, extname } from "node:path";
 import { realpathSync } from "node:fs";
 import { type CatalogStatus } from "./catalog.js";
+import { displayType } from "./domain.js";
 import {
   addSource,
   installCatalogEntries,
@@ -95,6 +96,8 @@ export function buildProgram(deps: CommandDependencies = {}): Command {
         agentDirectory: defaultAgentDir(),
       }));
       console.log(`wrote profile: ${output}`);
+      const checklist = renderScanChecklist(result);
+      if (checklist) console.log(checklist);
     });
 
   profile.command("show <path>")
@@ -135,6 +138,12 @@ export function buildProgram(deps: CommandDependencies = {}): Command {
     });
 
   return program;
+}
+
+export function renderScanChecklist(scan: Awaited<ReturnType<typeof scanPi>>): string {
+  return [...scan.packages, ...scan.skills, ...scan.extensions]
+    .map((resource) => `[v] ${displayType(resource.type)} ${resource.name}`)
+    .join("\n");
 }
 
 export function renderChecklist(statuses: CatalogStatus[], full: boolean): string {
