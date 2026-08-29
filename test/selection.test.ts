@@ -68,3 +68,27 @@ test("grouped selection preserves resource selection and navigation contract", (
   assert.deepEqual([...selectAll(withMissingLocal).selected], ["pkg", "skill:a"]);
   assert.deepEqual([...selectNone(initial).selected], []);
 });
+
+test("selected resource IDs are ordered by rows without mutating selection state", () => {
+  const initial = buildSelection(collection, emptyScan);
+  const childOnly = { ...initial, selected: new Set(["extension:b"]) };
+
+  assert.deepEqual(selectedResourceIds(childOnly), ["pkg", "extension:b"]);
+  assert.deepEqual([...childOnly.selected], ["extension:b"]);
+  assert.deepEqual(selectedResourceIds(childOnly), ["pkg", "extension:b"]);
+});
+
+test("selection transitions do not reuse mutable selected sets", () => {
+  const initial = buildSelection(collection, emptyScan);
+  const all = selectAll(initial);
+  const none = selectNone(all);
+  const toggled = toggleSelection(initial, "extension:b");
+
+  assert.notStrictEqual(all.selected, initial.selected);
+  assert.notStrictEqual(none.selected, all.selected);
+  assert.notStrictEqual(toggled.selected, initial.selected);
+  assert.deepEqual([...initial.selected], ["pkg", "skill:a"]);
+  assert.deepEqual([...all.selected], ["pkg", "skill:a", "extension:b"]);
+  assert.deepEqual([...none.selected], []);
+  assert.deepEqual([...toggled.selected], ["pkg", "skill:a", "extension:b"]);
+});
