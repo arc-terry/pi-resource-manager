@@ -107,9 +107,20 @@ export function mergeCollection(
   incoming: CollectionResource[],
   updatedAt = new Date().toISOString(),
 ): Collection {
+  const candidates = [...base.resources, ...incoming];
+  const packageIds = new Map<string, string>();
+  for (const resource of candidates) {
+    if (resource.type === "package") packageIds.set(resource.id, collectionResourceIdentity(resource));
+  }
+
   const resources: CollectionResource[] = [];
   const indexes = new Map<string, number>();
-  for (const candidate of [...base.resources, ...incoming]) {
+  for (const resource of candidates) {
+    const candidate: CollectionResource = {
+      ...resource,
+      ...(resource.type === "package" ? { id: collectionResourceIdentity(resource) } : {}),
+      ...(resource.ownerPackageId ? { ownerPackageId: packageIds.get(resource.ownerPackageId) ?? resource.ownerPackageId } : {}),
+    };
     const key = collectionResourceIdentity(candidate);
     const index = indexes.get(key);
     if (index === undefined) {

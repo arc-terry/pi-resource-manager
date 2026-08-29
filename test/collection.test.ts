@@ -119,6 +119,37 @@ test("normalizes duplicate base identities without incoming resources", () => {
   });
 });
 
+test("remaps children to the canonical duplicate package ID", () => {
+  const base = {
+    ...emptyCollection("x", new Date("2026-08-29T00:00:00Z")),
+    resources: [
+      {
+        id: "package:manual-tools", type: "package" as const, name: "tools",
+        origins: ["manual" as const], scope: "global" as const,
+        source: { kind: "npm" as const, spec: "npm:tools", name: "tools" },
+      },
+      {
+        id: "package:scan-tools", type: "package" as const, name: "tools",
+        origins: ["scan" as const], scope: "global" as const, installedPath: "/agent/npm/tools",
+        source: { kind: "npm" as const, spec: "npm:tools@1.2.3", name: "tools", version: "1.2.3" },
+      },
+      {
+        id: "skill:manual-tools:deploy", type: "skill" as const, name: "deploy",
+        origins: ["scan" as const], scope: "global" as const, installedPath: "/agent/npm/tools/skills/deploy",
+        ownerPackageId: "package:manual-tools",
+        source: { kind: "npm" as const, spec: "npm:tools@1.2.3", name: "tools", version: "1.2.3" },
+      },
+    ],
+  };
+
+  const merged = mergeCollection(base, [], "2026-08-29T01:00:00.000Z");
+
+  assert.deepEqual(merged.resources.map(({ id, ownerPackageId }) => ({ id, ownerPackageId })), [
+    { id: "package:npm:tools", ownerPackageId: undefined },
+    { id: "skill:manual-tools:deploy", ownerPackageId: "package:npm:tools" },
+  ]);
+});
+
 test("scan refresh clears stale observed project roots", () => {
   const base = {
     ...emptyCollection("x", new Date("2026-08-29T00:00:00Z")),
