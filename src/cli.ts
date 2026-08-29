@@ -53,6 +53,7 @@ export function buildProgram(deps: CommandDependencies = {}): Command {
         piPath: deps.piPath,
         env: deps.env,
         cwd: deps.cwd,
+        rescan: () => scanResources({}, deps),
       });
       printRestoreSummary(summary);
       if (summary.failed > 0) process.exitCode = 1;
