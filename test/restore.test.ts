@@ -147,6 +147,18 @@ test("rescans after package installs before completing restore", async () => {
   assert.equal(rescans, 1);
 });
 
+test("does not rescan when every Pi package install fails", async () => {
+  const { path } = await createFakePi(await makeTempDir(), "install npm:broken");
+  let rescans = 0;
+  const summary = await executeRestore(
+    [{ kind: "pi-install", id: "package:broken", args: ["install", "npm:broken"], scope: "global" }],
+    { piPath: path, yes: true, rescan: async () => { rescans += 1; return { packages: [], skills: [], extensions: [] }; } },
+  );
+
+  assert.equal(summary.failed, 1);
+  assert.equal(rescans, 0);
+});
+
 test("does not write auto-discovered top-level skills or extensions to settings", async () => {
   const root = await makeTempDir();
   const projectRoot = join(root, "project");

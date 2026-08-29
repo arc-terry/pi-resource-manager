@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { access, readFile, symlink } from "node:fs/promises";
 import test from "node:test";
 import { dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { readCollection, writeCollectionAtomic } from "../src/collection.js";
 import { createFakePi, makeTempDir } from "./helpers.js";
 
@@ -116,6 +117,29 @@ test("CLI exposes only scan, add, and install", async () => {
   assert.match(dryRun.stdout, /pi install npm:tools/);
   await assert.rejects(readFile(installFake.log, "utf8"));
 
+  const installed = await runCli(["install", "--yes"], {
+    cwd: installCwd,
+    env: { PATH: `${dirname(installFake.path)}:${process.env.PATH}` },
+  });
+  assert.equal(installed.code, 0);
+  assert.match(installed.stdout, /pi install npm:tools/);
+  assert.match(installed.stdout, /installed: 1/);
+  assert.equal(await readFile(installFake.log, "utf8"), "install npm:tools\n");
+
+  const failedInstallCwd = await makeTempDir();
+  const failingPi = await createFakePi(failedInstallCwd, "install npm:tools");
+  await writeCollectionAtomic(join(failedInstallCwd, "pi-collection.yml"), scannedToolsCollection);
+  const failedInstall = await runCli(["install", "--yes"], {
+    cwd: failedInstallCwd,
+    env: { PATH: `${dirname(failingPi.path)}:${process.env.PATH}` },
+  });
+  assert.equal(failedInstall.code, 1);
+  assert.match(failedInstall.stdout, /installed: 0/);
+  assert.match(failedInstall.stdout, /failed: 1/);
+  assert.match(failedInstall.stdout, /failure package:npm:tools:/);
+  assert.match(failedInstall.stdout, /exit status: 1/);
+  assert.equal(await readFile(failingPi.log, "utf8"), "install npm:tools\n");
+
   const noninteractive = await runCli(["install"], { cwd: installCwd });
   assert.equal(noninteractive.code, 1);
   assert.match(noninteractive.stderr, /use --yes/);
@@ -130,4 +154,12 @@ test("CLI exposes only scan, add, and install", async () => {
   const symlinked = await runProcess(linked, ["--help"]);
   assert.equal(symlinked.code, 0);
   assert.match(symlinked.stdout, /Usage: pi-collection/);
+  const imported = await runProcess(process.execPath, [
+    "--input-type=module",
+    "-e",
+    `import(${JSON.stringify(pathToFileURL(resolve("dist/cli.js")).href)})`,
+  ]);
+  assert.equal(imported.code, 0);
+  assert.equal(imported.stdout, "");
+  assert.equal(imported.stderr, "");
 });

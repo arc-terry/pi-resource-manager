@@ -231,9 +231,9 @@ export async function executeRestore(actions: RestoreAction[], options: ExecuteR
   let ranPackageInstall = false;
   for (const action of packageActions) {
     if (options.dryRun) { summary.skipped++; continue; }
-    ranPackageInstall = true;
     try {
       await runPi(action.args, { ...options, cwd: action.projectRoot ?? options.cwd });
+      ranPackageInstall = true;
       summary.installed++;
     } catch (error) {
       recordFailure(summary, action.id, error);
