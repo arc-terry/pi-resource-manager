@@ -106,3 +106,74 @@ test("TUI restores the terminal when its initial draw fails", async () => {
   assert.equal(tty.input.listenerCount("keypress"), 0);
   assert.match(tty.rendered(), /\u001b\[\?25h/);
 });
+
+test("TUI restores its cursor when raw mode reset fails", async () => {
+  const tty = fakeTty();
+  tty.input.setRawMode = (value) => {
+    tty.calls.push(value);
+    if (!value) throw new Error("raw reset failed");
+  };
+  const result = runInstallTui(buildSelection(collection, emptyScan), tty);
+  tty.input.write("\u001b");
+
+  await assert.rejects(result, /raw reset failed/);
+  assert.deepEqual(tty.calls, [true, false]);
+  assert.equal(tty.input.listenerCount("keypress"), 0);
+  assert.match(tty.rendered(), /\u001b\[\?25h/);
+});
+
+test("TUI renders origins and installed or missing statuses", () => {
+  const state = buildSelection(collection, {
+    packages: [{
+      id: "installed-pkg", type: "package", name: "tools", scope: "global", installedPath: "/packages/tools",
+      source: { kind: "npm", spec: "npm:tools@2", name: "tools", version: "2" },
+    }],
+    skills: [],
+    extensions: [],
+  }, { missingLocalIds: new Set(["extension:b"]) });
+  const rendered = renderSelection(state);
+
+  assert.match(rendered, /package tools  scan installed/);
+  assert.match(rendered, /plugin b  manual missing local source/);
+});
+
+test("TUI handles up, uppercase all or none, and disabled toggles", async () => {
+  const disabled = buildSelection(collection, emptyScan, { missingLocalIds: new Set(["extension:b"]) });
+  const tty = fakeTty();
+  const result = runInstallTui(disabled, tty);
+  tty.input.write("\u001b[A");
+  tty.input.write(" ");
+  tty.input.write("\r");
+  assert.deepEqual(await result, ["pkg", "skill:a"]);
+
+  assert.deepEqual((await runKeys(["A", "\r"])).result, ["pkg", "skill:a", "extension:b"]);
+  assert.deepEqual((await runKeys(["N", "\r"])).result, []);
+});
+
+test("TUI removes its listener after Escape or Ctrl-C", async () => {
+  for (const key of ["\u001b", "\u0003"]) {
+    const tty = fakeTty();
+    const result = runInstallTui(buildSelection(collection, emptyScan), tty);
+    tty.input.write(key);
+
+    assert.equal(await result, undefined);
+    assert.equal(tty.input.listenerCount("keypress"), 0);
+  }
+});
+
+test("TUI cleans up when a key-triggered draw fails", async () => {
+  const tty = fakeTty();
+  const write = tty.output.write.bind(tty.output);
+  let frames = 0;
+  tty.output.write = ((chunk: string | Uint8Array) => {
+    if (String(chunk).startsWith("\u001b[2J") && ++frames === 2) throw new Error("key draw failed");
+    return write(chunk);
+  }) as typeof tty.output.write;
+  const result = runInstallTui(buildSelection(collection, emptyScan), tty);
+  tty.input.write("z");
+
+  await assert.rejects(result, /key draw failed/);
+  assert.deepEqual(tty.calls, [true, false]);
+  assert.equal(tty.input.listenerCount("keypress"), 0);
+  assert.match(tty.rendered(), /\u001b\[\?25h/);
+});

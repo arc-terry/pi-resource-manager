@@ -45,9 +45,23 @@ export async function runInstallTui(initial: SelectionState, { input, output }: 
   const cleanup = () => {
     if (cleaned) return;
     cleaned = true;
-    input.removeListener("keypress", onKey);
-    input.setRawMode!(false);
-    output.write("\u001b[?25h\n");
+    let cleanupError: unknown;
+    try {
+      input.removeListener("keypress", onKey);
+    } catch (error) {
+      cleanupError = error;
+    }
+    try {
+      input.setRawMode!(false);
+    } catch (error) {
+      cleanupError ??= error;
+    }
+    try {
+      output.write("\u001b[?25h\n");
+    } catch (error) {
+      cleanupError ??= error;
+    }
+    if (cleanupError !== undefined) throw cleanupError;
   };
   let resolve!: (value: string[] | undefined) => void;
   let reject!: (reason: unknown) => void;
@@ -73,7 +87,11 @@ export async function runInstallTui(initial: SelectionState, { input, output }: 
       }
       draw();
     } catch (error) {
-      cleanup();
+      try {
+        cleanup();
+      } catch {
+        // Preserve the key handling failure over cleanup failures.
+      }
       reject(error);
     }
   };
@@ -85,7 +103,11 @@ export async function runInstallTui(initial: SelectionState, { input, output }: 
     output.write("\u001b[?25l");
     draw();
   } catch (error) {
-    cleanup();
+    try {
+      cleanup();
+    } catch {
+      // Preserve the initialization failure over cleanup failures.
+    }
     throw error;
   }
   return result.finally(cleanup);
