@@ -92,3 +92,60 @@ test("selection transitions do not reuse mutable selected sets", () => {
   assert.deepEqual([...none.selected], []);
   assert.deepEqual([...toggled.selected], ["pkg", "skill:a", "extension:b"]);
 });
+
+test("marks matching current-scan packages and owned children installed", () => {
+  const state = buildSelection(collection, {
+    packages: [{
+      id: "installed-pkg",
+      type: "package",
+      name: "tools",
+      scope: "global",
+      installedPath: "/packages/tools",
+      source: { kind: "npm", spec: "npm:tools@2", name: "tools", version: "2" },
+    }],
+    skills: [{
+      id: "installed-skill",
+      type: "skill",
+      name: "a",
+      scope: "global",
+      installedPath: "/packages/tools/skills/a",
+      ownerPackageId: "pkg",
+      source: { kind: "npm", spec: "npm:tools@2", name: "tools", version: "2" },
+    }],
+    extensions: [{
+      id: "installed-extension",
+      type: "extension",
+      name: "b",
+      scope: "global",
+      installedPath: "/packages/tools/extensions/b.ts",
+      ownerPackageId: "pkg",
+      source: { kind: "npm", spec: "npm:tools@2", name: "tools", version: "2" },
+    }],
+  });
+
+  assert.deepEqual(state.rows.map((row) => [row.id, row.installed]), [
+    ["pkg", true],
+    ["skill:a", true],
+    ["extension:b", true],
+  ]);
+});
+
+test("excludes disabled scan rows from defaults and final install IDs", () => {
+  const state = buildSelection(collection, emptyScan, { missingLocalIds: new Set(["pkg"]) });
+  const staleSelection = { ...state, selected: new Set(["pkg", "skill:a", "extension:b"]) };
+
+  assert.deepEqual([...state.selected], []);
+  assert.deepEqual(selectedResourceIds(staleSelection), []);
+  assert.strictEqual(toggleSelection(state, "pkg"), state);
+  assert.equal(state.rows.every((row) => row.disabled), true);
+});
+
+test("ignores disabled children when calculating and toggling package state", () => {
+  const state = buildSelection(collection, emptyScan, { missingLocalIds: new Set(["extension:b"]) });
+
+  assert.equal(checkState(state, "pkg"), "checked");
+  const cleared = toggleSelection(state, "pkg");
+  assert.deepEqual([...cleared.selected], []);
+  assert.equal(checkState(cleared, "pkg"), "unchecked");
+  assert.deepEqual([...toggleSelection(cleared, "pkg").selected], ["pkg", "skill:a"]);
+});

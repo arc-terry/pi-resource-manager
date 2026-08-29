@@ -1,6 +1,6 @@
 import type { Collection, CollectionResource } from "./collection.js";
+import type { Source } from "./domain.js";
 import type { ScanResult } from "./scanner.js";
-import { sourceIdentity } from "./sources.js";
 
 export type CheckState = "checked" | "unchecked" | "partial";
 
@@ -25,30 +25,44 @@ export function buildSelection(
   options: { missingLocalIds?: Set<string> } = {},
 ): SelectionState {
   const packages = collection.resources.filter((resource) => resource.type === "package");
-  const children = collection.resources.filter((resource) => resource.type !== "package" && resource.ownerPackageId);
-  const independent = collection.resources.filter((resource) => resource.type !== "package" && !resource.ownerPackageId);
+  const childrenByOwner = new Map<string, CollectionResource[]>();
+  const independent: CollectionResource[] = [];
+  for (const resource of collection.resources) {
+    if (resource.type === "package") continue;
+    if (!resource.ownerPackageId) {
+      independent.push(resource);
+      continue;
+    }
+    const children = childrenByOwner.get(resource.ownerPackageId) ?? [];
+    children.push(resource);
+    childrenByOwner.set(resource.ownerPackageId, children);
+  }
   const rows: SelectionRow[] = [];
 
   for (const pkg of packages) {
-    rows.push(rowFor(pkg, scan, options.missingLocalIds));
-    for (const child of children.filter((resource) => resource.ownerPackageId === pkg.id)) {
-      rows.push({ ...rowFor(child, scan, options.missingLocalIds), parentId: pkg.id, depth: 1 });
+    const packageRow = rowFor(pkg, scan, options.missingLocalIds);
+    rows.push(packageRow);
+    for (const child of childrenByOwner.get(pkg.id) ?? []) {
+      rows.push({ ...rowFor(child, scan, options.missingLocalIds, packageRow.disabled), parentId: pkg.id, depth: 1 });
     }
   }
   for (const resource of independent) rows.push(rowFor(resource, scan, options.missingLocalIds));
 
+  const disabledIds = new Set(rows.filter((row) => row.disabled).map((row) => row.id));
   return {
     collection,
     rows,
-    selected: new Set(collection.resources.filter((resource) => resource.origins.includes("scan")).map((resource) => resource.id)),
+    selected: new Set(collection.resources
+      .filter((resource) => resource.origins.includes("scan") && !disabledIds.has(resource.id))
+      .map((resource) => resource.id)),
     cursor: 0,
   };
 }
 
 export function checkState(state: SelectionState, id: string): CheckState {
-  const children = state.rows.filter((row) => row.parentId === id);
-  const members = children.length === 0 ? [id] : [id, ...children.map((row) => row.id)];
-  const selected = members.filter((member) => state.selected.has(member)).length;
+  const members = selectableRows(state, id);
+  if (members.length === 0) return "unchecked";
+  const selected = members.filter((member) => state.selected.has(member.id)).length;
   return selected === 0 ? "unchecked" : selected === members.length ? "checked" : "partial";
 }
 
@@ -57,17 +71,16 @@ export function toggleSelection(state: SelectionState, id: string): SelectionSta
   if (!row || row.disabled) return state;
 
   const selected = new Set(state.selected);
-  const children = state.rows.filter((candidate) => candidate.parentId === id && !candidate.disabled);
-  const targetIds = children.length > 0 ? [id, ...children.map((child) => child.id)] : [id];
-  const turnOn = children.length > 0 ? checkState(state, id) !== "checked" : !selected.has(id);
-  targetIds.forEach((target) => turnOn ? selected.add(target) : selected.delete(target));
+  const members = selectableRows(state, id);
+  const turnOn = checkState(state, id) !== "checked";
+  members.forEach(({ id: memberId }) => turnOn ? selected.add(memberId) : selected.delete(memberId));
   return { ...state, selected };
 }
 
 export function selectedResourceIds(state: SelectionState): string[] {
   const selected = new Set(state.selected);
   for (const row of state.rows) if (selected.has(row.id) && row.parentId) selected.add(row.parentId);
-  return state.rows.map((row) => row.id).filter((id) => selected.has(id));
+  return state.rows.filter((row) => !row.disabled && selected.has(row.id)).map((row) => row.id);
 }
 
 export function moveCursor(state: SelectionState, delta: -1 | 1): SelectionState {
@@ -83,20 +96,40 @@ export function selectNone(state: SelectionState): SelectionState {
   return { ...state, selected: new Set() };
 }
 
-function rowFor(resource: CollectionResource, scan: ScanResult, missingLocalIds: Set<string> | undefined): SelectionRow {
+function rowFor(
+  resource: CollectionResource,
+  scan: ScanResult,
+  missingLocalIds: Set<string> | undefined,
+  ownerDisabled = false,
+): SelectionRow {
   return {
     id: resource.id,
     depth: 0,
-    disabled: missingLocalIds?.has(resource.id) ?? false,
+    disabled: ownerDisabled || missingLocalIds?.has(resource.id) === true,
     installed: resourceIsInstalled(resource, scan),
   };
+}
+
+function selectableRows(state: SelectionState, id: string): SelectionRow[] {
+  const row = state.rows.find((candidate) => candidate.id === id);
+  if (!row || row.disabled) return [];
+  const children = state.rows.filter((candidate) => candidate.parentId === id && !candidate.disabled);
+  return children.length === 0 ? [row] : [row, ...children];
 }
 
 function resourceIsInstalled(resource: CollectionResource, scan: ScanResult): boolean {
   const candidates = resource.type === "package" ? scan.packages : resource.type === "skill" ? scan.skills : scan.extensions;
   return candidates.some((candidate) => resource.type === "package"
-    ? sourceIdentity(candidate.source) === sourceIdentity(resource.source)
+    ? storedSourceIdentity(candidate.source) === storedSourceIdentity(resource.source)
     : resource.ownerPackageId
       ? candidate.ownerPackageId === resource.ownerPackageId && candidate.name === resource.name
-      : sourceIdentity(candidate.source) === sourceIdentity(resource.source) && candidate.name === resource.name);
+      : storedSourceIdentity(candidate.source) === storedSourceIdentity(resource.source) && candidate.name === resource.name);
+}
+
+function storedSourceIdentity(source: Source): string {
+  switch (source.kind) {
+    case "npm": return `npm:${source.name}`;
+    case "git": return `git:${source.url}`;
+    case "local-path": return `local:${source.path}`;
+  }
 }
