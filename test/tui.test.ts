@@ -65,3 +65,44 @@ test("TUI renders grouped selection and handles selection, confirmation, cancell
     /use --yes/,
   );
 });
+
+test("TUI ignores a synchronous key following confirmation and restores the terminal", async () => {
+  const tty = fakeTty();
+  const result = runInstallTui(buildSelection(collection, emptyScan), tty);
+  tty.input.write("\r");
+  tty.input.write("\u001b[B");
+
+  assert.deepEqual(await result, ["pkg", "skill:a"]);
+  assert.deepEqual(tty.calls, [true, false]);
+  assert.equal(tty.input.listenerCount("keypress"), 0);
+  assert.match(tty.rendered(), /\u001b\[\?25h/);
+});
+
+test("TUI cancels on Ctrl-C and restores the terminal", async () => {
+  const cancelled = await runKeys(["\u0003"]);
+
+  assert.equal(cancelled.result, undefined);
+  assert.deepEqual(cancelled.calls, [true, false]);
+  assert.match(cancelled.rendered(), /\u001b\[\?25h/);
+});
+
+test("TUI restores the terminal when its initial draw fails", async () => {
+  const tty = fakeTty();
+  const write = tty.output.write.bind(tty.output);
+  let failDraw = true;
+  tty.output.write = ((chunk: string | Uint8Array) => {
+    if (failDraw && String(chunk).startsWith("\u001b[2J")) {
+      failDraw = false;
+      throw new Error("draw failed");
+    }
+    return write(chunk);
+  }) as typeof tty.output.write;
+
+  await assert.rejects(
+    runInstallTui(buildSelection(collection, emptyScan), tty),
+    /draw failed/,
+  );
+  assert.deepEqual(tty.calls, [true, false]);
+  assert.equal(tty.input.listenerCount("keypress"), 0);
+  assert.match(tty.rendered(), /\u001b\[\?25h/);
+});

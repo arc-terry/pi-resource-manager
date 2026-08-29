@@ -78,10 +78,15 @@ export async function runInstallTui(initial: SelectionState, { input, output }: 
     }
   };
 
-  input.setRawMode(true);
-  input.resume();
-  input.on("keypress", onKey);
-  output.write("\u001b[?25l");
-  draw();
+  try {
+    input.setRawMode(true);
+    input.resume();
+    input.on("keypress", onKey);
+    output.write("\u001b[?25l");
+    draw();
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
   return result.finally(cleanup);
 }
