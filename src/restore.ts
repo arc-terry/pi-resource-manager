@@ -43,6 +43,10 @@ export async function planRestore(profile: Profile, options: RestoreOptions = {}
     const identity = sourceIdentity(entry.source as Source);
     if (seenPackages.has(identity)) continue;
     seenPackages.add(identity);
+    if (entry.source.kind === "local-path" && !(await exists(entry.source.path))) {
+      actions.push({ kind: "missing-local-source", id: entry.id, path: entry.source.path });
+      continue;
+    }
     actions.push({
       kind: "pi-install",
       args: packageInstallArgs(entry),

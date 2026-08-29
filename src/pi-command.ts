@@ -11,7 +11,9 @@ export async function runPi(
   args: string[],
   options: { piPath?: string; env?: NodeJS.ProcessEnv; cwd?: string } = {},
 ): Promise<CommandResult> {
-  const child = spawn(options.piPath ?? "pi", args, {
+  const piPath = options.piPath ?? "pi";
+  const command = `Pi command ${JSON.stringify(piPath)} [${args.map((arg) => JSON.stringify(arg)).join(", ")}]`;
+  const child = spawn(piPath, args, {
     shell: false,
     cwd: options.cwd,
     env: options.env ?? process.env,
@@ -23,12 +25,12 @@ export async function runPi(
   child.stdout.on("data", (chunk: string) => { stdout += chunk; });
   child.stderr.on("data", (chunk: string) => { stderr += chunk; });
   const code = await new Promise<number>((resolve, reject) => {
-    child.once("error", reject);
+    child.once("error", (error) => reject(new Error(`${command} failed to start: ${error.message}`, { cause: error })));
     child.once("close", (exitCode) => resolve(exitCode ?? 1));
   });
   const result = { code, stdout, stderr };
   if (code !== 0) {
-    throw new Error(`Pi command ${JSON.stringify(args)} exited with code ${code}\nstdout: ${stdout}\nstderr: ${stderr}`);
+    throw new Error(`${command} exited with code ${code}\nstdout: ${stdout}\nstderr: ${stderr}`);
   }
   return result;
 }
