@@ -1,0 +1,59 @@
+import { readFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import YAML from "yaml";
+import { z } from "zod";
+import type { Resource } from "./domain.js";
+import type { ScanResult } from "./scanner.js";
+import { parsePiSource, sourceIdentity } from "./sources.js";
+
+const catalogEntrySchema = z.object({
+  name: z.string(),
+  type: z.enum(["package", "skill", "plugin"]),
+  source: z.string(),
+  description: z.string().optional(),
+  expectedResource: z.string().optional(),
+});
+
+export const catalogSchema = z.object({
+  schemaVersion: z.literal(1),
+  entries: z.array(catalogEntrySchema),
+});
+
+export type Catalog = z.infer<typeof catalogSchema> & { baseDir?: string };
+export type CatalogEntry = z.infer<typeof catalogEntrySchema>;
+
+export interface CatalogStatus {
+  entry: CatalogEntry;
+  installed: boolean;
+  package?: Resource;
+  resource?: Resource;
+}
+
+export async function loadCatalog(path: string): Promise<Catalog> {
+  const catalog: Catalog = { ...catalogSchema.parse(YAML.parse(await readFile(path, "utf8"))), baseDir: dirname(resolve(path)) };
+  for (const entry of catalog.entries) catalogSource(catalog, entry);
+  return catalog;
+}
+
+export function catalogSource(catalog: Catalog, entry: CatalogEntry): ReturnType<typeof parsePiSource> {
+  const source = parsePiSource(entry.source, catalog.baseDir);
+  if (source.kind === "npm" && !entry.source.startsWith("npm:")) {
+    throw new Error(`Pi-supported source required: ${entry.source}`);
+  }
+  return source;
+}
+
+export function matchCatalog(catalog: Catalog, scan: ScanResult): CatalogStatus[] {
+  return catalog.entries.map((entry) => matchEntry(catalog, entry, scan));
+}
+
+function matchEntry(catalog: Catalog, entry: CatalogEntry, scan: ScanResult): CatalogStatus {
+  const identity = sourceIdentity(catalogSource(catalog, entry));
+  const pkg = scan.packages.find((candidate) => sourceIdentity(candidate.source) === identity);
+  if (!pkg) return { entry, installed: false };
+  if (entry.type === "package") return { entry, installed: true, package: pkg };
+
+  const resources = entry.type === "skill" ? scan.skills : scan.extensions;
+  const resource = resources.find((candidate) => candidate.ownerPackageId === pkg.id && candidate.name === (entry.expectedResource ?? entry.name));
+  return resource ? { entry, installed: true, package: pkg, resource } : { entry, installed: false, package: pkg };
+}
