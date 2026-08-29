@@ -12,6 +12,15 @@ const scan = {
   extensions: [],
 };
 
+test("add defaults to scanning and saves scan-origin resources", async () => {
+  const collectionPath = join(await makeTempDir(), "pi-collection.yml");
+  let scans = 0;
+  await addResources({ collectionPath }, { scan: async () => { scans += 1; return scan; } });
+
+  assert.equal(scans, 1);
+  assert.deepEqual((await readCollection(collectionPath)).resources.map((resource) => [resource.name, resource.origins]), [["tools", ["scan"]]]);
+});
+
 test("scan and add orchestrate a schema-v2 collection", async () => {
   const root = await makeTempDir();
   const scanPath = join(root, "scan-only.yml");
