@@ -73,13 +73,7 @@ export async function planInstall(
     } else if (isPresent(resource, "package", resource.projectRoot, options.currentScan)) {
       actions.push({ kind: "already-present", id: resource.id });
     } else {
-      actions.push({
-        kind: "pi-install",
-        id: resource.id,
-        scope: resource.scope,
-        args: resource.scope === "local" ? ["install", "-l", sourceArgument(resource.source)] : ["install", sourceArgument(resource.source)],
-        ...(resource.projectRoot ? { projectRoot: resource.projectRoot } : {}),
-      });
+      actions.push(packageInstallAction(resource));
     }
   }
 
@@ -138,13 +132,7 @@ export async function planRestore(profile: Profile, options: RestoreOptions = {}
       actions.push({ kind: "already-present", id: entry.id });
       continue;
     }
-    actions.push({
-      kind: "pi-install",
-      args: packageInstallArgs(entry),
-      scope: entry.scope,
-      ...(projectRoot ? { projectRoot } : {}),
-      id: entry.id,
-    });
+    actions.push(packageInstallAction(entry, projectRoot));
   }
 
   const pathEntries: Array<{ type: "skill" | "plugin"; entries: ProfileEntry[]; key: "settings-skill" | "settings-extension" }> = [
@@ -210,9 +198,16 @@ function sourceArgument(source: Source): string {
   return source.kind === "local-path" ? source.path : source.spec;
 }
 
-function packageInstallArgs(entry: ProfileEntry): string[] {
-  const spec = sourceArgument(entry.source);
-  return entry.scope === "local" ? ["install", "-l", spec] : ["install", spec];
+type PackageInstallEntry = Pick<CollectionResource, "id" | "scope" | "source" | "projectRoot">;
+
+function packageInstallAction(entry: PackageInstallEntry, projectRoot = entry.projectRoot): Extract<RestoreAction, { kind: "pi-install" }> {
+  return {
+    kind: "pi-install",
+    id: entry.id,
+    scope: entry.scope,
+    args: entry.scope === "local" ? ["install", "-l", sourceArgument(entry.source)] : ["install", sourceArgument(entry.source)],
+    ...(projectRoot ? { projectRoot } : {}),
+  };
 }
 
 async function exists(path: string): Promise<boolean> {
