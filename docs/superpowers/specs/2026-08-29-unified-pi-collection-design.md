@@ -113,8 +113,8 @@ The schema rejects unknown schema versions, invalid source objects, empty origin
 Merging never emits duplicate resources. When scan and manual records match:
 
 - `origins` becomes `[scan, manual]` in stable order.
-- The scanned record refreshes observed fields such as `installedPath`, scope, and project root.
-- Explicit manual source/provenance remains available for restoration.
+- The scanned record refreshes the exact restoration source and observed fields such as `installedPath`, scope, and project root.
+- Manual provenance remains represented by the `manual` origin tag.
 - Package ownership relationships remain intact.
 
 ## Install TUI
