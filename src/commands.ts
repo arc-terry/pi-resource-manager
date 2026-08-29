@@ -27,7 +27,7 @@ export interface AddResourcesOptions extends ScanOptions {
 }
 
 export async function scanResources(options: ScanOptions = {}, deps: CommandDependencies = {}): Promise<ScanResult> {
-  return (deps.scan ?? scanPi)(options);
+  return (deps.scan ?? scanPi)({ ...options, ...(options.projectRoot ? { projectRoot: resolve(options.projectRoot) } : {}) });
 }
 
 export async function addResources(options: AddResourcesOptions = {}, deps: CommandDependencies = {}): Promise<Collection> {

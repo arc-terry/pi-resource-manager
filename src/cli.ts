@@ -3,13 +3,14 @@
 import { Command } from "commander";
 import { access } from "node:fs/promises";
 import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readCollection } from "./collection.js";
+import { readCollection, type Collection } from "./collection.js";
 import { addResources, scanResources, type CommandDependencies as CollectionCommandDependencies } from "./commands.js";
 import { displayType } from "./domain.js";
 import { executeRestore, planInstall, type RestoreAction, type RestoreSummary } from "./restore.js";
 import { buildSelection, selectedResourceIds } from "./selection.js";
-import { scanPi } from "./scanner.js";
+import { scanPi, type ScanResult } from "./scanner.js";
 import { runInstallTui } from "./tui.js";
 
 export interface CommandDependencies extends Pick<CollectionCommandDependencies, "scan" | "piPath" | "env" | "cwd"> {}
@@ -38,7 +39,7 @@ export function buildProgram(deps: CommandDependencies = {}): Command {
     .option("--yes")
     .action(async (options: { dryRun?: boolean; yes?: boolean }) => {
       const collection = await readCollection("pi-collection.yml");
-      const currentScan = await scanResources({}, deps);
+      const currentScan = await scanInstallResources(collection, deps);
       const state = buildSelection(collection, currentScan, { missingLocalIds: await missingLocalIds(collection.resources) });
       const selected = options.yes
         ? selectedResourceIds(state)
@@ -53,13 +54,34 @@ export function buildProgram(deps: CommandDependencies = {}): Command {
         piPath: deps.piPath,
         env: deps.env,
         cwd: deps.cwd,
-        rescan: () => scanResources({}, deps),
+        rescan: () => scanInstallResources(collection, deps),
       });
       printRestoreSummary(summary);
       if (summary.failed > 0) process.exitCode = 1;
     });
 
   return program;
+}
+
+export async function scanInstallResources(collection: Collection, deps: CommandDependencies = {}): Promise<ScanResult> {
+  const roots = [...new Set(collection.resources
+    .filter((resource) => resource.scope === "local" && resource.projectRoot)
+    .map((resource) => resolve(resource.projectRoot!)))].sort();
+  const scans = await Promise.all([scanResources({}, deps), ...roots.map((projectRoot) => scanResources({ projectRoot }, deps))]);
+  const result: ScanResult = { packages: [], skills: [], extensions: [] };
+  const seen = new Set<string>();
+  for (const [index, scan] of scans.entries()) {
+    for (const type of ["packages", "skills", "extensions"] as const) {
+      for (const resource of scan[type]) {
+        if (index > 0 && resource.scope !== "local") continue;
+        const key = `${resource.type}:${resource.scope}:${resource.projectRoot ?? ""}:${resource.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        result[type].push(resource);
+      }
+    }
+  }
+  return result;
 }
 
 export function renderScanChecklist(scan: Awaited<ReturnType<typeof scanPi>>): string {

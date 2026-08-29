@@ -1,6 +1,7 @@
 import type { Collection, CollectionResource } from "./collection.js";
 import type { Source } from "./domain.js";
 import type { ScanResult } from "./scanner.js";
+import { normalizeGitRepository } from "./sources.js";
 
 export type CheckState = "checked" | "unchecked" | "partial";
 
@@ -129,7 +130,7 @@ function resourceIsInstalled(resource: CollectionResource, scan: ScanResult): bo
 function storedSourceIdentity(source: Source): string {
   switch (source.kind) {
     case "npm": return `npm:${source.name}`;
-    case "git": return `git:${source.url}`;
+    case "git": return `git:${normalizeGitRepository(source.url)}`;
     case "local-path": return `local:${source.path}`;
   }
 }

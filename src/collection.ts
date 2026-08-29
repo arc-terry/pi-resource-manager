@@ -49,13 +49,21 @@ export const collectionSchema = z.object({
   collection: z.object({ name: z.string(), updatedAt: z.string().datetime() }),
   resources: z.array(resourceSchema),
 }).superRefine((value, ctx) => {
-  const ids = new Set(value.resources.map((resource) => resource.id));
+  const resourcesById = new Map<string, CollectionResource>();
+  value.resources.forEach((resource, index) => {
+    if (resourcesById.has(resource.id)) {
+      ctx.addIssue({ code: "custom", path: ["resources", index, "id"], message: "resource IDs must be unique" });
+    }
+    resourcesById.set(resource.id, resource);
+  });
   value.resources.forEach((resource, index) => {
     if (new Set(resource.origins).size !== resource.origins.length) {
       ctx.addIssue({ code: "custom", path: ["resources", index, "origins"], message: "origins must be unique" });
     }
-    if (resource.ownerPackageId && !ids.has(resource.ownerPackageId)) {
-      ctx.addIssue({ code: "custom", path: ["resources", index, "ownerPackageId"], message: "owner package does not exist" });
+    if (resource.ownerPackageId) {
+      const owner = resourcesById.get(resource.ownerPackageId);
+      if (!owner) ctx.addIssue({ code: "custom", path: ["resources", index, "ownerPackageId"], message: "owner package does not exist" });
+      else if (owner.type !== "package") ctx.addIssue({ code: "custom", path: ["resources", index, "ownerPackageId"], message: "owner package must reference a package" });
     }
     if (resource.scope === "local" && resource.origins.includes("scan") && !resource.projectRoot) {
       ctx.addIssue({ code: "custom", path: ["resources", index, "projectRoot"], message: "local scanned resources require projectRoot" });
@@ -84,8 +92,17 @@ export function collectionResourceIdentity(
 }
 
 export function resourcesFromScan(scan: ScanResult): CollectionResource[] {
-  const convert = (resource: Resource): CollectionResource => ({ ...resource, origins: ["scan"] });
-  return [...scan.packages, ...scan.skills, ...scan.extensions].map(convert);
+  const scanned = [...scan.packages, ...scan.skills, ...scan.extensions];
+  const packageIds = new Map(scanned.filter((resource) => resource.type === "package")
+    .map((resource) => [resource.id, collectionResourceIdentity(resource)]));
+  return scanned.map((resource) => {
+    const candidate: CollectionResource = {
+      ...resource,
+      origins: ["scan"],
+      ...(resource.ownerPackageId ? { ownerPackageId: packageIds.get(resource.ownerPackageId) ?? resource.ownerPackageId } : {}),
+    };
+    return { ...candidate, id: collectionResourceIdentity(candidate) };
+  });
 }
 
 export function manualPackage(source: Source): CollectionResource {
@@ -118,9 +135,9 @@ export function mergeCollection(
   for (const resource of candidates) {
     const candidate: CollectionResource = {
       ...resource,
-      ...(resource.type === "package" ? { id: collectionResourceIdentity(resource) } : {}),
       ...(resource.ownerPackageId ? { ownerPackageId: packageIds.get(resource.ownerPackageId) ?? resource.ownerPackageId } : {}),
     };
+    candidate.id = collectionResourceIdentity(candidate);
     const key = collectionResourceIdentity(candidate);
     const index = indexes.get(key);
     if (index === undefined) {

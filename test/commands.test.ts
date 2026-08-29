@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { addResources, scanResources } from "../src/commands.js";
 import { readCollection } from "../src/collection.js";
 import { makeTempDir } from "./helpers.js";
@@ -19,6 +19,25 @@ test("add defaults to scanning and saves scan-origin resources", async () => {
 
   assert.equal(scans, 1);
   assert.deepEqual((await readCollection(collectionPath)).resources.map((resource) => [resource.name, resource.origins]), [["tools", ["scan"]]]);
+});
+
+test("canonicalizes project roots before scanning and persisting", async () => {
+  const collectionPath = join(await makeTempDir(), "pi-collection.yml");
+  const projectRoot = "relative-project";
+  const scannedRoots: Array<string | undefined> = [];
+
+  await addResources({ scan: true, projectRoot, collectionPath }, {
+    scan: async (options) => {
+      scannedRoots.push(options.projectRoot);
+      return {
+        packages: [{ id: "package:npm:local", type: "package", name: "local", scope: "local", projectRoot: options.projectRoot!, installedPath: "/agent/local", source: { kind: "npm", spec: "npm:local", name: "local" } }],
+        skills: [], extensions: [],
+      };
+    },
+  });
+
+  assert.deepEqual(scannedRoots, [resolve(projectRoot)]);
+  assert.equal((await readCollection(collectionPath)).resources[0]?.projectRoot, resolve(projectRoot));
 });
 
 test("scan and add orchestrate a schema-v2 collection", async () => {

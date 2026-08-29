@@ -130,6 +130,25 @@ test("marks matching current-scan packages and owned children installed", () => 
   ]);
 });
 
+test("marks equivalent Git transports as installed", () => {
+  const state = buildSelection({
+    ...collection,
+    resources: [{
+      ...collection.resources[0]!,
+      id: "git-pkg",
+      source: { kind: "git", spec: "https://github.com/acme/pi-tools.git@v2", url: "https://github.com/acme/pi-tools.git", ref: "v2" },
+    }],
+  }, {
+    packages: [{
+      id: "installed-git-pkg", type: "package", name: "tools", scope: "global", installedPath: "/packages/pi-tools",
+      source: { kind: "git", spec: "git:git@github.com:acme/pi-tools@main", url: "git@github.com:acme/pi-tools", ref: "main" },
+    }],
+    skills: [], extensions: [],
+  });
+
+  assert.equal(state.rows[0]?.installed, true);
+});
+
 test("excludes disabled scan rows from defaults and final install IDs", () => {
   const state = buildSelection(collection, emptyScan, { missingLocalIds: new Set(["pkg"]) });
   const staleSelection = { ...state, selected: new Set(["pkg", "skill:a", "extension:b"]) };

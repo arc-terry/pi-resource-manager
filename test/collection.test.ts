@@ -65,6 +65,43 @@ test("rejects collection resources with invalid cross-field values", () => {
       source: { kind: "npm", spec: "npm:local", name: "local" },
     }],
   }), /local scanned resources require projectRoot/);
+  assert.throws(() => collectionSchema.parse({
+    ...schemaBase,
+    resources: [
+      { id: "duplicate", type: "package", name: "one", origins: ["manual"], scope: "global", source: { kind: "npm", spec: "npm:one", name: "one" } },
+      { id: "duplicate", type: "package", name: "two", origins: ["manual"], scope: "global", source: { kind: "npm", spec: "npm:two", name: "two" } },
+    ],
+  }), /resource IDs must be unique/);
+  assert.throws(() => collectionSchema.parse({
+    ...schemaBase,
+    resources: [
+      { id: "skill:owner", type: "skill", name: "owner", origins: ["manual"], scope: "global", source: { kind: "npm", spec: "npm:owner", name: "owner" } },
+      { id: "extension:child", type: "extension", name: "child", origins: ["manual"], scope: "global", ownerPackageId: "skill:owner", source: { kind: "npm", spec: "npm:owner", name: "owner" } },
+    ],
+  }), /owner package must reference a package/);
+});
+
+test("converts scanned resources to canonical IDs independent of installed paths", () => {
+  const resources = resourcesFromScan({
+    packages: [{
+      id: "package:raw", type: "package", name: "pi-tools", scope: "global", installedPath: "/first/pi-tools",
+      source: { kind: "git", spec: "https://github.com/acme/pi-tools.git@v2", url: "https://github.com/acme/pi-tools.git", ref: "v2" },
+    }],
+    skills: [{
+      id: "skill:/first/pi-tools/skills/deploy", type: "skill", name: "deploy", scope: "global", installedPath: "/first/pi-tools/skills/deploy", ownerPackageId: "package:raw",
+      source: { kind: "git", spec: "https://github.com/acme/pi-tools.git@v2", url: "https://github.com/acme/pi-tools.git", ref: "v2" },
+    }],
+    extensions: [{
+      id: "extension:/first/independent.ts", type: "extension", name: "independent", scope: "global", installedPath: "/first/independent.ts",
+      source: { kind: "local-path", path: "/stable/independent.ts" },
+    }],
+  });
+
+  assert.deepEqual(resources.map(({ id, ownerPackageId }) => ({ id, ownerPackageId })), [
+    { id: "package:git:github.com/acme/pi-tools", ownerPackageId: undefined },
+    { id: "skill:owner:package:git:github.com/acme/pi-tools:deploy", ownerPackageId: "package:git:github.com/acme/pi-tools" },
+    { id: "extension:local:/stable/independent.ts:independent", ownerPackageId: undefined },
+  ]);
 });
 
 test("merges matching scan and manual packages without duplication", () => {
@@ -146,7 +183,7 @@ test("remaps children to the canonical duplicate package ID", () => {
 
   assert.deepEqual(merged.resources.map(({ id, ownerPackageId }) => ({ id, ownerPackageId })), [
     { id: "package:npm:tools", ownerPackageId: undefined },
-    { id: "skill:manual-tools:deploy", ownerPackageId: "package:npm:tools" },
+    { id: "skill:owner:package:npm:tools:deploy", ownerPackageId: "package:npm:tools" },
   ]);
 });
 

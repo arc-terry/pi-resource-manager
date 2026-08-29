@@ -16,9 +16,15 @@ interface TuiInput extends Readable {
   setRawMode?(enabled: boolean): void;
 }
 
+interface SignalSource {
+  on(event: "SIGINT" | "SIGTERM" | "SIGHUP", listener: () => void): unknown;
+  removeListener(event: "SIGINT" | "SIGTERM" | "SIGHUP", listener: () => void): unknown;
+}
+
 export interface TuiOptions {
   input: TuiInput;
   output: Writable;
+  signalSource?: SignalSource;
 }
 
 export function renderSelection(state: SelectionState): string {
@@ -33,23 +39,34 @@ export function renderSelection(state: SelectionState): string {
   return ["Install Pi Resources", ...rows, "", "↑/↓ Move  Space Toggle  A All  N None  Enter Install  Esc Cancel"].join("\n");
 }
 
-export async function runInstallTui(initial: SelectionState, { input, output }: TuiOptions): Promise<string[] | undefined> {
+export async function runInstallTui(initial: SelectionState, options: TuiOptions): Promise<string[] | undefined> {
+  const { input, output } = options;
   if (input.isTTY !== true || typeof input.setRawMode !== "function") {
     throw new Error("install requires an interactive terminal; use --yes for non-interactive use");
   }
 
   emitKeypressEvents(input);
+  const signalSource = options.signalSource ?? process;
+  const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
   let state = initial;
   let cleaned = false;
+  let onSignal!: () => void;
   const draw = () => output.write(`\u001b[2J\u001b[H${renderSelection(state)}`);
   const cleanup = () => {
     if (cleaned) return;
     cleaned = true;
     let cleanupError: unknown;
+    for (const signal of signals) {
+      try {
+        signalSource.removeListener(signal, onSignal);
+      } catch (error) {
+        cleanupError ??= error;
+      }
+    }
     try {
       input.removeListener("keypress", onKey);
     } catch (error) {
-      cleanupError = error;
+      cleanupError ??= error;
     }
     try {
       input.setRawMode!(false);
@@ -95,11 +112,20 @@ export async function runInstallTui(initial: SelectionState, { input, output }: 
       reject(error);
     }
   };
+  onSignal = () => {
+    try {
+      cleanup();
+      resolve(undefined);
+    } catch (error) {
+      reject(error);
+    }
+  };
 
   try {
     input.setRawMode(true);
     input.resume();
     input.on("keypress", onKey);
+    for (const signal of signals) signalSource.on(signal, onSignal);
     output.write("\u001b[?25l");
     draw();
   } catch (error) {

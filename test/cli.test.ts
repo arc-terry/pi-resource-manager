@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { access, readFile, symlink } from "node:fs/promises";
+import { access, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import test from "node:test";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -64,6 +64,33 @@ const scannedToolsCollection = {
     source: { kind: "npm" as const, spec: "npm:tools", name: "tools" },
   }],
 };
+
+test("install scans saved local project roots before planning", async () => {
+  const cwd = await makeTempDir();
+  const projectRoot = join(cwd, "project");
+  const agentDir = join(cwd, "agent");
+  const fake = await createFakePi(cwd);
+  await writeAgent(agentDir);
+  await mkdir(join(projectRoot, ".pi"), { recursive: true });
+  await writeFile(join(projectRoot, ".pi", "settings.json"), JSON.stringify({ packages: ["npm:local-tools"] }));
+  await writeCollectionAtomic(join(cwd, "pi-collection.yml"), {
+    schemaVersion: 2,
+    collection: { name: "test", updatedAt: "2026-08-29T00:00:00.000Z" },
+    resources: [{
+      id: "package:npm:local-tools", type: "package", name: "local-tools", origins: ["scan"], scope: "local", projectRoot,
+      source: { kind: "npm", spec: "npm:local-tools", name: "local-tools" },
+    }],
+  });
+
+  const result = await runCli(["install", "--yes"], {
+    cwd,
+    env: { PI_CODING_AGENT_DIR: agentDir, PATH: `${dirname(fake.path)}:${process.env.PATH}` },
+  });
+
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /already present: 1/);
+  await assert.rejects(readFile(fake.log, "utf8"));
+});
 
 // Fails if the legacy Commander command surface remains, unified commands do not
 // persist their intended origins, or noninteractive/dry-run installation regresses.

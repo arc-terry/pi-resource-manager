@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { Collection } from "../src/collection.js";
 import { buildSelection } from "../src/selection.js";
@@ -105,6 +106,30 @@ test("TUI restores the terminal when its initial draw fails", async () => {
   assert.deepEqual(tty.calls, [true, false]);
   assert.equal(tty.input.listenerCount("keypress"), 0);
   assert.match(tty.rendered(), /\u001b\[\?25h/);
+});
+
+test("TUI cleans up after each injected termination signal", async () => {
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+    const tty = fakeTty();
+    const signals = new EventEmitter();
+    const result = runInstallTui(buildSelection(collection, emptyScan), {
+      input: tty.input,
+      output: tty.output,
+      signalSource: signals,
+    } as Parameters<typeof runInstallTui>[1]);
+
+    try {
+      assert.equal(signals.listenerCount(signal), 1);
+      signals.emit(signal);
+      assert.equal(await result, undefined);
+      assert.deepEqual(tty.calls, [true, false]);
+      assert.equal(tty.input.listenerCount("keypress"), 0);
+      assert.equal(signals.listenerCount(signal), 0);
+    } finally {
+      tty.input.write("\u001b");
+      await result.catch(() => undefined);
+    }
+  }
 });
 
 test("TUI restores its cursor when raw mode reset fails", async () => {
