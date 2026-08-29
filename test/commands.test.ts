@@ -1,197 +1,68 @@
 import assert from "node:assert/strict";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { dirname, join } from "node:path";
-import { Readable, Writable } from "node:stream";
-import { addSource, installCatalogEntries, listCollection, removeCatalogEntries } from "../src/commands.js";
-import { loadCatalog, matchCatalog } from "../src/catalog.js";
-import { createFakePi, makeTempDir } from "./helpers.js";
+import { join, resolve } from "node:path";
+import { addResources, scanResources } from "../src/commands.js";
+import { readCollection } from "../src/collection.js";
+import { makeTempDir } from "./helpers.js";
 
-test("marks a matching catalog package installed by normalized source identity", () => {
-  const statuses = matchCatalog(
-    { schemaVersion: 1, entries: [{ name: "tools", type: "package", source: "npm:tools@1.0.0" }] },
-    { packages: [{ id: "package:npm:tools", type: "package", name: "tools", source: { kind: "npm", spec: "npm:tools@2.0.0", name: "tools", version: "2.0.0" } }], skills: [], extensions: [] } as never,
-  );
-
-  assert.deepEqual(statuses.map((status) => [status.installed, status.entry.name]), [[true, "tools"]]);
-});
-
-test("requires the expected package-provided resource for skills and plugins", () => {
-  const statuses = matchCatalog(
-    {
-      schemaVersion: 1,
-      entries: [
-        { name: "review", type: "skill", source: "npm:tools", expectedResource: "code-review" },
-        { name: "team", type: "plugin", source: "npm:tools" },
-      ],
-    },
-    {
-      packages: [{ id: "package:npm:tools", type: "package", name: "tools", source: { kind: "npm", spec: "npm:tools", name: "tools" } }],
-      skills: [{ id: "skill:package:npm:tools:code-review", type: "skill", name: "code-review", ownerPackageId: "package:npm:tools" }],
-      extensions: [{ id: "extension:other:team", type: "extension", name: "team", ownerPackageId: "package:npm:other" }],
-    } as never,
-  );
-
-  assert.deepEqual(statuses.map((status) => [status.entry.name, status.installed]), [["review", true], ["team", false]]);
-});
-
-test("loads a schema-versioned catalog", async () => {
-  const file = join(await makeTempDir(), "catalog.yml");
-  await writeFile(file, "schemaVersion: 1\nentries:\n  - name: tools\n    type: package\n    source: npm:tools\n");
-
-  assert.deepEqual(await loadCatalog(file), {
-    schemaVersion: 1,
-    entries: [{ name: "tools", type: "package", source: "npm:tools" }],
-    baseDir: dirname(file),
-  });
-});
-
-test("rejects a catalog with an unsupported schema version", async () => {
-  const file = join(await makeTempDir(), "catalog.yml");
-  await writeFile(file, "schemaVersion: 2\nentries: []\n");
-
-  await assert.rejects(loadCatalog(file), /schemaVersion/);
-});
-
-test("rejects bare npm names in catalog sources", async () => {
-  const file = join(await makeTempDir(), "catalog.yml");
-  await writeFile(file, "schemaVersion: 1\nentries:\n  - name: tools\n    type: package\n    source: tools\n");
-
-  await assert.rejects(loadCatalog(file), /Pi-supported source required: tools/);
-});
-
-const catalog = {
-  schemaVersion: 1 as const,
-  entries: [
-    { name: "tools", type: "package" as const, source: "npm:tools" },
-    { name: "review", type: "skill" as const, source: "npm:review-tools" },
-    { name: "team", type: "plugin" as const, source: "npm:team-tools" },
-  ],
+const scan = {
+  packages: [{ id: "package:npm:tools", type: "package" as const, name: "tools", scope: "global" as const, installedPath: "/agent/npm/tools", source: { kind: "npm" as const, spec: "npm:tools", name: "tools" } }],
+  skills: [],
+  extensions: [],
 };
 
-const emptyScan = { packages: [], skills: [], extensions: [] };
+test("add defaults to scanning and saves scan-origin resources", async () => {
+  const collectionPath = join(await makeTempDir(), "pi-collection.yml");
+  let scans = 0;
+  await addResources({ collectionPath }, { scan: async () => { scans += 1; return scan; } });
 
-function quietOutput(): Writable {
-  return new Writable({ write(_chunk, _encoding, callback) { callback(); } });
-}
-
-test("lists only the requested catalog type", async () => {
-  const statuses = await listCollection({ type: "skill" }, { catalog, scan: async () => emptyScan });
-
-  assert.deepEqual(statuses.map((status) => status.entry.name), ["review"]);
+  assert.equal(scans, 1);
+  assert.deepEqual((await readCollection(collectionPath)).resources.map((resource) => [resource.name, resource.origins]), [["tools", ["scan"]]]);
 });
 
-test("installs exactly the selected catalog entry through Pi", async () => {
-  const { path, log } = await createFakePi(await makeTempDir());
+test("canonicalizes project roots before scanning and persisting", async () => {
+  const collectionPath = join(await makeTempDir(), "pi-collection.yml");
+  const projectRoot = "relative-project";
+  const scannedRoots: Array<string | undefined> = [];
 
-  const result = await installCatalogEntries(["review"], { yes: true }, { catalog, scan: async () => emptyScan, piPath: path });
+  await addResources({ scan: true, projectRoot, collectionPath }, {
+    scan: async (options) => {
+      scannedRoots.push(options.projectRoot);
+      return {
+        packages: [{ id: "package:npm:local", type: "package", name: "local", scope: "local", projectRoot: options.projectRoot!, installedPath: "/agent/local", source: { kind: "npm", spec: "npm:local", name: "local" } }],
+        skills: [], extensions: [],
+      };
+    },
+  });
 
-  assert.deepEqual(result, { requested: 1, completed: 1, skipped: 0 });
-  assert.equal(await readFile(log, "utf8"), "install npm:review-tools\n");
+  assert.deepEqual(scannedRoots, [resolve(projectRoot)]);
+  assert.equal((await readCollection(collectionPath)).resources[0]?.projectRoot, resolve(projectRoot));
 });
 
-test("installs every catalog source with full", async () => {
-  const { path, log } = await createFakePi(await makeTempDir());
+test("scan and add orchestrate a schema-v2 collection", async () => {
+  const root = await makeTempDir();
+  const scanPath = join(root, "scan-only.yml");
+  assert.deepEqual(await scanResources({ projectRoot: root }, { scan: async () => scan }), scan);
+  await assert.rejects(readFile(scanPath, "utf8"));
 
-  await installCatalogEntries([], { full: true, yes: true }, { catalog, scan: async () => emptyScan, piPath: path });
+  const collectionPath = join(root, "pi-collection.yml");
+  await addResources({ scan: true, collectionPath, now: new Date("2026-08-29T00:00:00Z") }, { scan: async () => scan });
+  let collection = await readCollection(collectionPath);
+  assert.equal(collection.schemaVersion, 2);
+  assert.deepEqual(collection.resources.map((resource) => [resource.name, resource.origins]), [["tools", ["scan"]]]);
 
-  assert.equal(await readFile(log, "utf8"), "install npm:tools\ninstall npm:review-tools\ninstall npm:team-tools\n");
-});
+  await addResources({ scan: true, collectionPath }, { scan: async () => ({ packages: [], skills: [], extensions: [] }) });
+  collection = await readCollection(collectionPath);
+  assert.deepEqual(collection.resources.map((resource) => resource.name), ["tools"]);
 
-test("does not install catalog entries when confirmation is declined", async () => {
-  const { path, log } = await createFakePi(await makeTempDir());
+  const manualPath = join(root, "manual.yml");
+  await addResources({ source: "npm:manual-tools", collectionPath: manualPath }, { scan: async () => { throw new Error("scan must not run"); } });
+  assert.deepEqual((await readCollection(manualPath)).resources.map((resource) => [resource.type, resource.name, resource.origins]), [["package", "manual-tools", ["manual"]]]);
 
-  const result = await installCatalogEntries(
-    ["tools"],
-    { yes: false, input: Readable.from(["n\n"]), output: quietOutput() },
-    { catalog, scan: async () => emptyScan, piPath: path },
-  );
-
-  assert.deepEqual(result, { requested: 1, completed: 0, skipped: 1 });
-  await assert.rejects(readFile(log, "utf8"));
-});
-
-test("removes a locally installed catalog source with Pi local scope", async () => {
-  const { path, log } = await createFakePi(await makeTempDir());
-  const localScan = {
-    packages: [{ id: "package:npm:tools", type: "package" as const, name: "tools", scope: "local" as const, source: { kind: "npm" as const, spec: "npm:tools", name: "tools" }, installedPath: "/project/.pi/npm/tools", projectRoot: "/project" }],
-    skills: [],
-    extensions: [],
-  };
-
-  const result = await removeCatalogEntries(["tools"], { yes: true }, { catalog, scan: async () => localScan, piPath: path });
-
-  assert.deepEqual(result, { requested: 1, completed: 1, skipped: 0 });
-  assert.equal(await readFile(log, "utf8"), "remove -l npm:tools\n");
-});
-
-test("removes a local catalog package after scanning the requested project", async () => {
-  const { path, log } = await createFakePi(await makeTempDir());
-  const scanCalls: Array<{ agentDir?: string; projectRoot?: string }> = [];
-  const localScan = {
-    packages: [{ id: "package:npm:tools", type: "package" as const, name: "tools", scope: "local" as const, source: { kind: "npm" as const, spec: "npm:tools", name: "tools" }, installedPath: "/project/.pi/npm/tools", projectRoot: "/project" }],
-    skills: [],
-    extensions: [],
-  };
-  const scan = async (options: { agentDir?: string; projectRoot?: string }) => {
-    scanCalls.push(options);
-    return options.projectRoot === "/project" ? localScan : emptyScan;
-  };
-
-  const result = await removeCatalogEntries(
-    ["tools"],
-    { yes: true, agentDir: "/agent", projectRoot: "/project" },
-    { catalog, scan, piPath: path },
-  );
-
-  assert.deepEqual(scanCalls, [{ agentDir: "/agent", projectRoot: "/project" }]);
-  assert.deepEqual(result, { requested: 1, completed: 1, skipped: 0 });
-  assert.equal(await readFile(log, "utf8"), "remove -l npm:tools\n");
-});
-
-test("resolves relative local catalog sources from the catalog directory for matching and install", async () => {
-  const catalogDir = await makeTempDir();
-  const catalogPath = join(catalogDir, "catalog.yml");
-  const localSource = join(catalogDir, "tools");
-  await writeFile(catalogPath, "schemaVersion: 1\nentries:\n  - name: tools\n    type: package\n    source: ./tools\n");
-  const loadedCatalog = await loadCatalog(catalogPath);
-  const scan = {
-    packages: [{ id: `package:local:${localSource}`, type: "package" as const, name: "tools", scope: "global" as const, source: { kind: "local-path" as const, path: localSource }, installedPath: "/agent/tools" }],
-    skills: [],
-    extensions: [],
-  };
-  const { path, log } = await createFakePi(await makeTempDir());
-
-  assert.equal(matchCatalog(loadedCatalog, scan).at(0)?.installed, true);
-  await installCatalogEntries(["tools"], { yes: true }, { catalog: loadedCatalog, scan: async () => scan, piPath: path });
-  assert.equal(await readFile(log, "utf8"), `install ${localSource}\n`);
-});
-
-test("adds only a source that supplies the requested skill", async () => {
-  const { path } = await createFakePi(await makeTempDir());
-
-  const result = await addSource("npm:tools", { expectedType: "skill", dryRun: true, yes: true }, { piPath: path, scan: async () => emptyScan });
-
-  assert.equal(result.validation, "pending-rescan");
-});
-
-test("validates a requested plugin after Pi installs the source", async () => {
-  const { path, log } = await createFakePi(await makeTempDir());
-  const scan = {
-    packages: [{ id: "package:npm:tools", type: "package" as const, name: "tools", scope: "global" as const, source: { kind: "npm" as const, spec: "npm:tools", name: "tools" }, installedPath: "/agent/npm/tools" }],
-    skills: [],
-    extensions: [{ id: "extension:package:npm:tools:team", type: "extension" as const, name: "team", scope: "global" as const, source: { kind: "npm" as const, spec: "npm:tools", name: "tools" }, installedPath: "/agent/npm/tools/extensions/team.ts", ownerPackageId: "package:npm:tools" }],
-  };
-
-  const result = await addSource("npm:tools", { expectedType: "plugin", yes: true }, { piPath: path, scan: async () => scan });
-
-  assert.equal(result.validation, "passed");
-  assert.equal(await readFile(log, "utf8"), "install npm:tools\n");
-});
-
-test("rejects an unsupported add source before Pi is invoked", async () => {
-  const { path, log } = await createFakePi(await makeTempDir());
-
-  await assert.rejects(addSource("tools", { dryRun: false, yes: true }, { piPath: path, scan: async () => emptyScan }), /Pi-supported source/);
-  await assert.rejects(readFile(log, "utf8"));
+  const invalidPath = join(root, "invalid.yml");
+  await assert.rejects(addResources({ source: "tools", collectionPath: invalidPath }), /Pi-supported source/);
+  await assert.rejects(readFile(invalidPath, "utf8"));
+  await assert.rejects(addResources({ source: "npm:tools", scan: true, collectionPath: invalidPath }), /mutually exclusive/);
+  await assert.rejects(readFile(invalidPath, "utf8"));
 });

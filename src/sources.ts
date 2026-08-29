@@ -29,10 +29,17 @@ export function sourceIdentity(source: Source): string {
     case "npm":
       return `npm:${source.name}`;
     case "git":
-      return `git:${source.url}`;
+      return `git:${normalizeGitRepository(source.url)}`;
     case "local-path":
       return `local:${resolveLocalPath(source.path)}`;
   }
+}
+
+export function normalizeGitRepository(url: string): string {
+  let repository = url.replace(/^(?:https?|ssh|git):\/\//, "").replace(/^[^@/]+@/, "");
+  const shorthand = /^([^/:]+):(.+)$/.exec(repository);
+  if (shorthand) repository = `${shorthand[1]}/${shorthand[2]}`;
+  return repository.replace(/\/+$/, "").replace(/\.git$/, "");
 }
 
 function parseNpmSource(spec: string): NpmSource {

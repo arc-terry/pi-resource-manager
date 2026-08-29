@@ -50,12 +50,13 @@ const agentsSkillDiscovery: SkillDiscoveryOptions = { includeRootMarkdown: false
 
 export async function scanPi(options: { agentDir?: string; projectRoot?: string }): Promise<ScanResult> {
   const agentDir = options.agentDir ?? defaultAgentDir();
+  const projectRoot = options.projectRoot && resolve(options.projectRoot);
   const scopes: ScanScope[] = [{ scope: "global", locations: locationsFor("global", agentDir) }];
-  if (options.projectRoot) {
+  if (projectRoot) {
     scopes.push({
       scope: "local",
-      locations: locationsFor("local", agentDir, options.projectRoot),
-      projectRoot: options.projectRoot,
+      locations: locationsFor("local", agentDir, projectRoot),
+      projectRoot,
     });
   }
 

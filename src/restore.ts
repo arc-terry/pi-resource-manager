@@ -1,8 +1,8 @@
 import { access } from "node:fs/promises";
 import { basename, relative, resolve } from "node:path";
-import type { Scope } from "./domain.js";
-import { locationsFor, updateSettingsArray } from "./settings.js";
-import type { Profile, ProfileEntry } from "./profile.js";
+import type { Collection, CollectionResource } from "./collection.js";
+import { type Scope, type Source } from "./domain.js";
+import { defaultAgentDir, locationsFor, updateSettingsArray } from "./settings.js";
 import type { ScanResult } from "./scanner.js";
 import { sourceIdentity } from "./sources.js";
 import { confirm, PiCommandError, runPi } from "./pi-command.js";
@@ -14,9 +14,7 @@ export type RestoreAction =
   | { kind: "missing-local-source"; id: string; path: string };
 
 export interface RestoreOptions {
-  projectRoot?: string;
   agentDir?: string;
-  only?: "package" | "skill" | "plugin";
   currentScan?: ScanResult;
 }
 
@@ -48,77 +46,66 @@ export interface RestoreSummary {
   failures: RestoreFailure[];
 }
 
-export async function planRestore(profile: Profile, options: RestoreOptions = {}): Promise<RestoreAction[]> {
-  const actions: RestoreAction[] = [];
-  const include = (type: "package" | "skill" | "plugin") => !options.only || options.only === type;
-  const requestedResources = [
-    ...(include("skill") ? profile.skills : []),
-    ...(include("plugin") ? profile.extensions : []),
-  ];
-  const requestedOwnerIds = new Set(requestedResources.flatMap((entry) => entry.ownerPackageId === undefined ? [] : [entry.ownerPackageId]));
-  const packageEntries = profile.packages.filter((entry) => include("package") || requestedOwnerIds.has(entry.id));
-  const seenPackages = new Set<string>();
-
-  for (const entry of packageEntries) {
-    const identity = sourceIdentity(entry.source);
-    if (seenPackages.has(identity)) continue;
-    seenPackages.add(identity);
-    const projectRoot = targetProjectRoot(entry, options);
-    if (entry.source.kind === "local-path" && !(await exists(entry.source.path))) {
-      actions.push({ kind: "missing-local-source", id: entry.id, path: entry.source.path });
-      continue;
-    }
-    const ownedResources = requestedResources.filter((resource) => resource.ownerPackageId === entry.id);
-    const ownerResourcesPresent = ownedResources.every((resource) => isPresent(
-      resource,
-      profile.skills.includes(resource) ? "skill" : "extension",
-      targetProjectRoot(resource, options),
-      options.currentScan,
-    ));
-    if (isPresent(entry, "package", projectRoot, options.currentScan) && ownerResourcesPresent) {
-      actions.push({ kind: "already-present", id: entry.id });
-      continue;
-    }
-    actions.push({
-      kind: "pi-install",
-      args: packageInstallArgs(entry),
-      scope: entry.scope,
-      ...(projectRoot ? { projectRoot } : {}),
-      id: entry.id,
-    });
+export async function planInstall(
+  collection: Collection,
+  selectedIds: Iterable<string>,
+  options: { currentScan?: ScanResult; agentDir?: string } = {},
+): Promise<RestoreAction[]> {
+  const selected = new Set(selectedIds);
+  const byId = new Map(collection.resources.map((resource) => [resource.id, resource]));
+  for (const id of [...selected]) {
+    const owner = byId.get(id)?.ownerPackageId;
+    if (owner) selected.add(owner);
   }
 
-  const pathEntries: Array<{ type: "skill" | "plugin"; entries: ProfileEntry[]; key: "settings-skill" | "settings-extension" }> = [
-    { type: "skill", entries: profile.skills, key: "settings-skill" },
-    { type: "plugin", entries: profile.extensions, key: "settings-extension" },
-  ];
-  for (const group of pathEntries) {
-    if (!include(group.type)) continue;
-    for (const entry of group.entries) {
-      if (entry.ownerPackageId !== undefined || entry.source.kind !== "local-path") continue;
-      const projectRoot = targetProjectRoot(entry, options);
-      if (!(await exists(entry.source.path))) {
-        actions.push({ kind: "missing-local-source", id: entry.id, path: entry.source.path });
-        continue;
-      }
-      if (isPresent(entry, group.type === "skill" ? "skill" : "extension", projectRoot, options.currentScan)) {
-        actions.push({ kind: "already-present", id: entry.id });
-        continue;
-      }
-      if (isAutoDiscovered(entry, group.type, profile.profile.pi.agentDirectory)) continue;
-      const locations = locationsFor(entry.scope, options.agentDir ?? profile.profile.pi.agentDirectory, projectRoot);
-      actions.push({ kind: group.key, settingsPath: locations.settingsPath, value: entry.source.path, ...(projectRoot ? { projectRoot } : {}), id: entry.id });
+  const actions: RestoreAction[] = [];
+  const packageIdentities = new Set<string>();
+  for (const resource of collection.resources) {
+    if (!selected.has(resource.id) || resource.type !== "package") continue;
+    const identity = sourceIdentity(resource.source);
+    if (packageIdentities.has(identity)) continue;
+    packageIdentities.add(identity);
+    if (resource.source.kind === "local-path" && !(await exists(resource.source.path))) {
+      actions.push({ kind: "missing-local-source", id: resource.id, path: resource.source.path });
+    } else if (
+      isPresent(resource, "package", resource.projectRoot, options.currentScan)
+      && collection.resources.filter((candidate) => selected.has(candidate.id) && candidate.ownerPackageId === resource.id)
+        .every((candidate) => isPresent(candidate, candidate.type, candidate.projectRoot, options.currentScan))
+    ) {
+      actions.push({ kind: "already-present", id: resource.id });
+    } else {
+      actions.push(packageInstallAction(resource));
     }
+  }
+
+  for (const resource of collection.resources) {
+    if (!selected.has(resource.id) || resource.type === "package" || resource.ownerPackageId || resource.source.kind !== "local-path") continue;
+    if (!(await exists(resource.source.path))) {
+      actions.push({ kind: "missing-local-source", id: resource.id, path: resource.source.path });
+      continue;
+    }
+    if (isPresent(resource, resource.type, resource.projectRoot, options.currentScan)) {
+      actions.push({ kind: "already-present", id: resource.id });
+      continue;
+    }
+    const agentDir = options.agentDir ?? defaultAgentDir();
+    if (isAutoDiscovered(resource, resource.type === "skill" ? "skill" : "plugin", agentDir)) continue;
+    const locations = locationsFor(resource.scope, agentDir, resource.projectRoot);
+    actions.push({
+      kind: resource.type === "skill" ? "settings-skill" : "settings-extension",
+      id: resource.id,
+      settingsPath: locations.settingsPath,
+      value: resource.source.path,
+      ...(resource.projectRoot ? { projectRoot: resource.projectRoot } : {}),
+    });
   }
   return actions;
 }
 
-function targetProjectRoot(entry: ProfileEntry, options: RestoreOptions): string | undefined {
-  return entry.scope === "local" ? (options.projectRoot ?? entry.projectRoot) : undefined;
-}
+type InstallResource = Pick<CollectionResource, "name" | "scope" | "source" | "projectRoot" | "ownerPackageId"> & { installedPath?: string };
 
 function isPresent(
-  entry: ProfileEntry,
+  entry: InstallResource,
   type: "package" | "skill" | "extension",
   projectRoot: string | undefined,
   scan: ScanResult | undefined,
@@ -131,9 +118,9 @@ function isPresent(
     && (entry.ownerPackageId === undefined || (resource.ownerPackageId === entry.ownerPackageId && resource.name === entry.name)));
 }
 
-function isAutoDiscovered(entry: ProfileEntry, type: "skill" | "plugin", agentDir: string): boolean {
+function isAutoDiscovered(entry: InstallResource, type: "skill" | "plugin", agentDir: string): boolean {
   const locations = locationsFor(entry.scope, agentDir, entry.projectRoot);
-  const path = entry.source.kind === "local-path" ? entry.source.path : entry.installedPath;
+  const path = entry.source.kind === "local-path" ? entry.source.path : entry.installedPath ?? "";
   if (type === "skill") return locations.skillsDirs.some((directory) => isTopLevelPath(path, directory));
   return isTopLevelPath(path, locations.extensionsDir)
     || (basename(path) === "index.ts" && isTopLevelPath(resolve(path, ".."), locations.extensionsDir));
@@ -145,9 +132,20 @@ function isTopLevelPath(path: string, directory: string): boolean {
     && pathFromDirectory.split(/[\\/]/).length === 1;
 }
 
-function packageInstallArgs(entry: ProfileEntry): string[] {
-  const spec = entry.source.kind === "local-path" ? entry.source.path : entry.source.spec;
-  return entry.scope === "local" ? ["install", "-l", spec] : ["install", spec];
+function sourceArgument(source: Source): string {
+  return source.kind === "local-path" ? source.path : source.spec;
+}
+
+type PackageInstallEntry = Pick<CollectionResource, "id" | "scope" | "source" | "projectRoot">;
+
+function packageInstallAction(entry: PackageInstallEntry, projectRoot = entry.projectRoot): Extract<RestoreAction, { kind: "pi-install" }> {
+  return {
+    kind: "pi-install",
+    id: entry.id,
+    scope: entry.scope,
+    args: entry.scope === "local" ? ["install", "-l", sourceArgument(entry.source)] : ["install", sourceArgument(entry.source)],
+    ...(projectRoot ? { projectRoot } : {}),
+  };
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -157,7 +155,7 @@ async function exists(path: string): Promise<boolean> {
 export async function executeRestore(actions: RestoreAction[], options: ExecuteRestoreOptions): Promise<RestoreSummary> {
   const summary: RestoreSummary = { installed: 0, alreadyPresent: 0, skipped: 0, failed: 0, failures: [] };
   const mutating = actions.some((action) => action.kind === "pi-install" || action.kind.startsWith("settings-"));
-  if (!options.dryRun && mutating && !(await confirm("Restore this Pi profile?", options))) {
+  if (!options.dryRun && mutating && !(await confirm("Install selected Pi resources?", options))) {
     summary.skipped = actions.length;
     return summary;
   }
@@ -167,9 +165,9 @@ export async function executeRestore(actions: RestoreAction[], options: ExecuteR
   let ranPackageInstall = false;
   for (const action of packageActions) {
     if (options.dryRun) { summary.skipped++; continue; }
-    ranPackageInstall = true;
     try {
       await runPi(action.args, { ...options, cwd: action.projectRoot ?? options.cwd });
+      ranPackageInstall = true;
       summary.installed++;
     } catch (error) {
       recordFailure(summary, action.id, error);

@@ -1,137 +1,60 @@
 #!/usr/bin/env node
 
 import { Command } from "commander";
-import { fileURLToPath } from "node:url";
-import YAML from "yaml";
-import { basename, extname } from "node:path";
+import { access } from "node:fs/promises";
 import { realpathSync } from "node:fs";
-import { type CatalogStatus } from "./catalog.js";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { readCollection, type Collection } from "./collection.js";
+import { addResources, scanResources, type CommandDependencies as CollectionCommandDependencies } from "./commands.js";
 import { displayType } from "./domain.js";
-import {
-  addSource,
-  installCatalogEntries,
-  listCollection,
-  removeCatalogEntries,
-  type CatalogCommandSummary,
-  type CommandDependencies as CollectionCommandDependencies,
-} from "./commands.js";
-import { defaultAgentDir } from "./settings.js";
-import { profileFromScan, readProfile, writeProfileAtomic } from "./profile.js";
-import { executeRestore, planRestore, type RestoreAction, type RestoreSummary } from "./restore.js";
-import { scanPi } from "./scanner.js";
+import { executeRestore, planInstall, type RestoreAction, type RestoreSummary } from "./restore.js";
+import { buildSelection, selectedResourceIds } from "./selection.js";
+import { scanPi, type ScanResult } from "./scanner.js";
+import { runInstallTui } from "./tui.js";
 
-type PublicResourceType = "package" | "skill" | "plugin";
-
-export interface CommandDependencies extends CollectionCommandDependencies {}
+export interface CommandDependencies extends Pick<CollectionCommandDependencies, "scan" | "piPath" | "env" | "cwd"> {}
 
 export function buildProgram(deps: CommandDependencies = {}): Command {
   const program = new Command()
     .name("pi-collection")
-    .description("Manage Pi packages, skills, and plugins");
+    .description("Capture and install Pi resources");
 
-  program.command("list")
-    .option("--full", "include source and installation details")
-    .option("--type <type>", "package, skill, or plugin")
-    .option("--json", "emit catalog status as JSON")
-    .option("--profile <path>", "profile path", "pi-profile.yml")
-    .action(async (options: { full?: boolean; type?: string; json?: boolean; profile?: string }) => {
-      const type = publicType(options.type);
-      const statuses = await listCollection({ type, profilePath: options.profile }, deps);
-      if (options.json) {
-        process.stdout.write(`${JSON.stringify(statuses)}\n`);
-        return;
-      }
-      console.log(renderChecklist(statuses, options.full ?? false));
+  program.command("scan")
+    .option("--project <path>")
+    .action(async (options: { project?: string }) => {
+      console.log(renderScanChecklist(await scanResources({ projectRoot: options.project }, deps)));
     });
 
-  program.command("install [names...]")
-    .option("--full", "install every catalog entry")
-    .option("--type <type>", "package, skill, or plugin")
-    .option("--yes", "skip the confirmation prompt")
-    .action(async (names: string[], options: { full?: boolean; type?: string; yes?: boolean }) => {
-      const summary = await installCatalogEntries(names, {
-        full: options.full,
-        type: publicType(options.type),
-        yes: options.yes ?? false,
-      }, deps);
-      printCatalogSummary(summary);
+  program.command("add [source]")
+    .option("--scan", "save resources discovered on this computer")
+    .option("--project <path>")
+    .action(async (source: string | undefined, options: { scan?: boolean; project?: string }) => {
+      const collection = await addResources({ source, scan: options.scan, projectRoot: options.project }, deps);
+      console.log(`wrote collection: pi-collection.yml\nresources: ${collection.resources.length}`);
     });
 
-  program.command("remove <names...>")
-    .option("--type <type>", "package, skill, or plugin")
-    .option("--yes", "skip the confirmation prompt")
-    .action(async (names: string[], options: { type?: string; yes?: boolean }) => {
-      const summary = await removeCatalogEntries(names, {
-        type: publicType(options.type),
-        yes: options.yes ?? false,
-      }, deps);
-      printCatalogSummary(summary);
-    });
+  program.command("install")
+    .option("--dry-run")
+    .option("--yes")
+    .action(async (options: { dryRun?: boolean; yes?: boolean }) => {
+      const collection = await readCollection("pi-collection.yml");
+      const currentScan = await scanInstallResources(collection, deps);
+      const state = buildSelection(collection, currentScan, { missingLocalIds: await missingLocalIds(collection.resources) });
+      const selected = options.yes
+        ? selectedResourceIds(state)
+        : await runInstallTui(state, { input: process.stdin, output: process.stdout });
+      if (selected === undefined) return;
 
-  program.command("add <source>")
-    .option("-l, --local", "install in Pi's local scope")
-    .option("--type <type>", "assert package, skill, or plugin resources")
-    .option("--dry-run", "show the requested operation without changing Pi")
-    .option("--yes", "skip the confirmation prompt")
-    .action(async (source: string, options: { local?: boolean; type?: string; dryRun?: boolean; yes?: boolean }) => {
-      const result = await addSource(source, {
-        local: options.local,
-        expectedType: publicType(options.type),
-        dryRun: options.dryRun,
-        yes: options.yes ?? false,
-      }, deps);
-      console.log(`source: ${source}\nvalidation: ${result.validation}`);
-    });
-
-  const profile = program.command("profile").description("Scan, show, and restore Pi profiles");
-  profile.command("scan")
-    .option("--output <path>", "profile output path", "pi-profile.yml")
-    .option("--project <path>", "include local resources from this project")
-    .action(async (options: { output: string; project?: string }) => {
-      const scan = deps.scan ?? scanPi;
-      const result = await scan({ projectRoot: options.project });
-      const output = options.output;
-      await writeProfileAtomic(output, profileFromScan(result, {
-        name: basename(output, extname(output)),
-        agentDirectory: defaultAgentDir(),
-      }));
-      console.log(`wrote profile: ${output}`);
-      const checklist = renderScanChecklist(result);
-      if (checklist) console.log(checklist);
-    });
-
-  profile.command("show <path>")
-    .action(async (path: string) => {
-      process.stdout.write(YAML.stringify(await readProfile(path)));
-    });
-
-  profile.command("restore <path>")
-    .option("--dry-run", "show restore actions without changing Pi")
-    .option("--only <type>", "package, skill, or plugin")
-    .option("--project <path>", "restore local resources to this project")
-    .option("--yes", "skip the confirmation prompt")
-    .action(async (path: string, options: { dryRun?: boolean; only?: string; project?: string; yes?: boolean }) => {
-      const restoreProfile = await readProfile(path);
-      const projectRoot = options.project ?? recordedProjectRoot(restoreProfile);
-      const scan = deps.scan ?? scanPi;
-      const scanOptions = { agentDir: restoreProfile.profile.pi.agentDirectory, projectRoot };
-      const currentScan = await scan(scanOptions);
-      const actions = await planRestore(restoreProfile, {
-        only: publicType(options.only),
-        projectRoot: options.project,
-        agentDir: restoreProfile.profile.pi.agentDirectory,
-        currentScan,
-      });
-      printRestoreActions(actions);
+      const actions = await planInstall(collection, selected, { currentScan });
+      printInstallActions(actions);
       const summary = await executeRestore(actions, {
         dryRun: options.dryRun,
-        only: publicType(options.only),
-        projectRoot: options.project,
-        yes: options.yes ?? false,
+        yes: true,
         piPath: deps.piPath,
         env: deps.env,
         cwd: deps.cwd,
-        rescan: async () => scan(scanOptions),
+        rescan: () => scanInstallResources(collection, deps),
       });
       printRestoreSummary(summary);
       if (summary.failed > 0) process.exitCode = 1;
@@ -140,44 +63,47 @@ export function buildProgram(deps: CommandDependencies = {}): Command {
   return program;
 }
 
+export async function scanInstallResources(collection: Collection, deps: CommandDependencies = {}): Promise<ScanResult> {
+  const roots = [...new Set(collection.resources
+    .filter((resource) => resource.scope === "local" && resource.projectRoot)
+    .map((resource) => resolve(resource.projectRoot!)))].sort();
+  const scans = await Promise.all([scanResources({}, deps), ...roots.map((projectRoot) => scanResources({ projectRoot }, deps))]);
+  const result: ScanResult = { packages: [], skills: [], extensions: [] };
+  const seen = new Set<string>();
+  for (const [index, scan] of scans.entries()) {
+    for (const type of ["packages", "skills", "extensions"] as const) {
+      for (const resource of scan[type]) {
+        if (index > 0 && resource.scope !== "local") continue;
+        const key = `${resource.type}:${resource.scope}:${resource.projectRoot ?? ""}:${resource.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        result[type].push(resource);
+      }
+    }
+  }
+  return result;
+}
+
 export function renderScanChecklist(scan: Awaited<ReturnType<typeof scanPi>>): string {
   return [...scan.packages, ...scan.skills, ...scan.extensions]
     .map((resource) => `[v] ${displayType(resource.type)} ${resource.name}`)
     .join("\n");
 }
 
-export function renderChecklist(statuses: CatalogStatus[], full: boolean): string {
-  return statuses.map((status) => {
-    const line = `[${status.installed ? "v" : " "}] ${status.entry.type} ${status.entry.name}`;
-    if (!full) return line;
-    const details = [
-      `source: ${status.entry.source}`,
-      ...(status.entry.description ? [`description: ${status.entry.description}`] : []),
-      ...((status.package ?? status.resource ?? status.profile)
-        ? [
-          `scope: ${(status.package ?? status.resource ?? status.profile)!.scope}`,
-          `installedPath: ${(status.package ?? status.resource ?? status.profile)!.installedPath}`,
-          ...((status.package ?? status.resource ?? status.profile)!.projectRoot
-            ? [`projectRoot: ${(status.package ?? status.resource ?? status.profile)!.projectRoot}`]
-            : []),
-        ]
-        : []),
-    ];
-    return `${line}\n${details.map((detail) => `  ${detail}`).join("\n")}`;
-  }).join("\n");
+async function missingLocalIds(resources: Awaited<ReturnType<typeof readCollection>>["resources"]): Promise<Set<string>> {
+  const missing = await Promise.all(resources.map(async (resource) => {
+    if (resource.source.kind !== "local-path") return undefined;
+    try {
+      await access(resource.source.path);
+      return undefined;
+    } catch {
+      return resource.id;
+    }
+  }));
+  return new Set(missing.filter((id): id is string => id !== undefined));
 }
 
-function publicType(value: string | undefined): PublicResourceType | undefined {
-  if (value === undefined) return undefined;
-  if (value === "package" || value === "skill" || value === "plugin") return value;
-  throw new Error(`Invalid type ${JSON.stringify(value)}; expected package, skill, or plugin`);
-}
-
-function printCatalogSummary(summary: CatalogCommandSummary): void {
-  console.log(`requested: ${summary.requested}\ncompleted: ${summary.completed}\nskipped: ${summary.skipped}`);
-}
-
-function printRestoreActions(actions: RestoreAction[]): void {
+function printInstallActions(actions: RestoreAction[]): void {
   for (const action of actions) {
     if (action.kind === "pi-install") console.log(`pi ${action.args.join(" ")}`);
     else if (action.kind === "settings-skill") console.log(`settings skill ${action.value}`);
@@ -185,10 +111,6 @@ function printRestoreActions(actions: RestoreAction[]): void {
     else if (action.kind === "missing-local-source") console.log(`missing local source: ${action.path}`);
     else console.log(`already present: ${action.id}`);
   }
-}
-
-function recordedProjectRoot(profile: Awaited<ReturnType<typeof readProfile>>): string | undefined {
-  return [...profile.packages, ...profile.skills, ...profile.extensions].find((entry) => entry.scope === "local")?.projectRoot;
 }
 
 function printRestoreSummary(summary: RestoreSummary): void {
