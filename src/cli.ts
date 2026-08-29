@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 import { Command } from "commander";
 import { fileURLToPath } from "node:url";
 import YAML from "yaml";

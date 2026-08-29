@@ -12,6 +12,24 @@ interface CliResult {
   stderr: string;
 }
 
+interface ProcessResult extends CliResult {
+  error?: Error;
+}
+
+async function runProcess(command: string, args: string[]): Promise<ProcessResult> {
+  const child = spawn(command, args);
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => { stdout += chunk; });
+  child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+  return new Promise((resolveResult) => {
+    child.once("error", (error) => resolveResult({ code: 1, stdout, stderr, error }));
+    child.once("close", (exitCode) => resolveResult({ code: exitCode ?? 1, stdout, stderr }));
+  });
+}
+
 async function runCli(args: string[], options: { cwd: string; env?: NodeJS.ProcessEnv }): Promise<CliResult> {
   const child = spawn(process.execPath, ["--import", resolve("node_modules/tsx/dist/loader.mjs"), resolve("src/cli.ts"), ...args], {
     cwd: options.cwd,
@@ -66,6 +84,17 @@ test("renders missing and installed entries with required brackets", () => {
     ] as never, false),
     "[v] package tools\n[ ] plugin team",
   );
+});
+
+test("build output is directly executable", async () => {
+  const build = await runProcess("npm", ["run", "build"]);
+  assert.equal(build.error, undefined);
+  assert.equal(build.code, 0);
+
+  const result = await runProcess(resolve("dist/cli.js"), ["--help"]);
+  assert.equal(result.error, undefined);
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /Usage: pi-collection/);
 });
 
 test("list filters types, renders full details, and emits JSON without prose", async () => {

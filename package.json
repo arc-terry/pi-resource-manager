@@ -5,7 +5,7 @@
   "type": "module",
   "bin": { "pi-collection": "./dist/cli.js" },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && chmod +x dist/cli.js",
     "test": "tsx --test test/**/*.test.ts",
     "check": "tsc --noEmit -p tsconfig.json"
   },
