@@ -1,10 +1,10 @@
 # Pi Collection
 
-`pi-collection` manages a reviewed collection of [Pi](https://github.com/badlogic/pi-mono) packages, skills, and extensions. The CLI calls Pi extensions **plugins**; profile files retain Pi's canonical `extension` name.
+`pi-collection` captures a reviewed collection of [Pi](https://github.com/badlogic/pi-mono) packages, skills, and extensions, then installs selected resources through Pi.
 
 ## Install and build
 
-This repository requires Node.js 20 or later and an installed, runnable `pi` command for operations that change Pi.
+Node.js 20 or later is required. An installed, runnable `pi` command is required only for installation.
 
 ```sh
 npm install
@@ -12,7 +12,7 @@ npm run build
 node dist/cli.js --help
 ```
 
-The build creates the `dist/cli.js` target for the package's `pi-collection` binary. To make that binary available from a checkout, link the built package:
+To use the binary from a checkout:
 
 ```sh
 npm link
@@ -21,138 +21,82 @@ pi-collection --help
 
 ## Commands
 
-Run commands from a directory containing the repository's `catalog.yml` when using the collection catalog.
+`pi-collection` has exactly three commands: `scan`, `add`, and `install`.
 
-### List catalog entries
-
-```sh
-pi-collection list
-pi-collection list --type plugin
-pi-collection list --full
-pi-collection list --json
-```
-
-The normal checklist has one entry per catalog item:
-
-- `[v]` means a matching resource was detected in the current Pi scan.
-- `[ ]` means the catalog item was not detected.
-
-`--full` adds the catalog source and description, plus detected installation scope and path. `--json` writes only JSON, for scripts. `--type` accepts `package`, `skill`, or `plugin` (not Pi's internal `extension`).
-
-### Install catalog entries
+### Scan
 
 ```sh
-pi-collection install review-workflow --type skill
-pi-collection install --full --yes
+pi-collection scan
+pi-collection scan --project ~/projects/app
 ```
 
-Pass one or more catalog names to install them, or use `--full` to install every catalog entry. Catalog installs are global by default. `--type package|skill|plugin` narrows the selected catalog type. Installation asks for confirmation unless `--yes` is supplied.
+`scan` is read-only: it reports resources Pi currently discovers and does not create or modify `pi-collection.yml`.
 
-### Remove catalog entries
+### Add
 
 ```sh
-pi-collection remove review-workflow --type skill
-pi-collection remove review-workflow --yes
+pi-collection add --scan
+pi-collection add npm:@acme/pi-tools
+pi-collection add git:github.com/acme/pi-tools@91fe33a
+pi-collection add ./company-tools
 ```
 
-Removal uses the source and scope detected by the Pi scan. It asks for confirmation unless `--yes` is supplied.
+`add` defaults to scanning the current Pi setup, so `pi-collection add` and `pi-collection add --scan` save discovered resources with the `scan` origin. Pass one manual Pi source to save a package with the `manual` origin instead. Manual sources support Pi's `npm:`, Git, and local-path forms.
 
-### Add a Pi source
+Adding only records resources in `pi-collection.yml`; it does **not** install anything. An existing collection is updated with a non-destructive merge: saved resources remain, matching resources combine their origins, and new discoveries are added.
+
+### Install
 
 ```sh
-pi-collection add npm:@acme/pi-tools --type plugin
-pi-collection add ./company-tools --local --yes
-pi-collection add git:github.com/acme/pi-tools@91fe33a --dry-run
+pi-collection install
+pi-collection install --dry-run --yes
 ```
 
-`add` accepts only Pi-supported sources:
+`install` loads `pi-collection.yml`, scans the destination, and opens a selection TUI. Resources with the `scan` origin are selected by default; manually added resources are initially unselected. Package-owned skills and extensions are grouped beneath their package.
 
-- npm: `npm:<package>` or `npm:<package>@<version>`
-- Git shorthand: `git:<repository>` with an optional ref
-- Git URLs using `https:`, `http:`, `ssh:`, or `git:`
-- absolute paths and paths beginning with `./` or `../`
+TUI keys: `↑/↓ Move`, `Space Toggle`, `A All`, `N None`, `Enter Install`, `Esc Cancel`.
 
-`--local` selects Pi's project-local scope; otherwise the source is global. `--type package|skill|plugin` verifies after installation that the package supplied the requested kind of resource. `--dry-run` prints the requested add operation without changing Pi. `--yes` bypasses the confirmation prompt.
+`--dry-run` prints the Pi and settings actions without changing Pi or settings. `--yes` accepts the default selection without opening the TUI; use `--yes` for CI and other non-interactive automation.
 
-### Scan and inspect a profile
+## Collection format
 
-```sh
-pi-collection profile scan
-pi-collection profile scan --output workstation.yml --project ~/projects/app
-pi-collection profile show workstation.yml
-```
-
-`profile scan` writes `pi-profile.yml` by default. Use `--output` to choose another YAML file and `--project` to include project-local Pi resources. `profile show` prints a validated profile as YAML.
-
-### Restore a profile
-
-```sh
-pi-collection profile restore workstation.yml --dry-run
-pi-collection profile restore workstation.yml --only plugin --project ~/projects/app --yes
-```
-
-Restore first plans package operations, then restores independent skill and plugin paths. `--dry-run` validates the profile and prints the Pi and settings operations without modifying Pi. `--only package|skill|plugin` filters what is restored. `--project` deliberately remaps local entries to a destination project; without it, a profile's recorded project root is used. Restore prompts before changes unless `--yes` is supplied, prints a summary, and exits nonzero when any requested entry fails.
-
-## Scope and profiles
-
-Global is the default Pi scope. Global packages are installed under Pi's agent directory; local packages are installed under a project's `.pi/` directory and use Pi's `-l` install flag. Profiles record the scope, observed `installedPath`, restoration source, and `projectRoot` for every local resource. They record references and provenance, not a copy of package or skill source code.
-
-The versioned YAML profile format is:
+The only supported format is the schema-v2 `pi-collection.yml` file. There is no legacy YAML support.
 
 ```yaml
-schemaVersion: 1
-profile:
+schemaVersion: 2
+collection:
   name: workstation
-  generatedAt: 2026-08-25T10:30:00Z
-  pi:
-    agentDirectory: /Users/alex/.pi/agent
-    version: 0.52.0
-
-packages:
+  updatedAt: 2026-08-29T10:30:00.000Z
+resources:
   - id: package:npm:@acme/pi-tools
+    type: package
     name: "@acme/pi-tools"
+    origins:
+      - scan
+      - manual
     scope: global
     source:
       kind: npm
       spec: npm:@acme/pi-tools@1.2.3
-    installedPath: /Users/alex/.pi/agent/npm/@acme/pi-tools
-    version: 1.2.3
-
-  - id: package:git:github.com/acme/pi-tools
-    name: pi-tools
-    scope: local
-    projectRoot: /Users/alex/projects/app
-    source:
-      kind: git
-      spec: git:github.com/acme/pi-tools@91fe33a
-      url: https://github.com/acme/pi-tools
-      ref: 91fe33a
-    installedPath: /Users/alex/projects/app/.pi/git/github.com/acme/pi-tools
-
-skills:
-  - id: skill:review-workflow
-    name: review-workflow
+      name: "@acme/pi-tools"
+      version: 1.2.3
+  - id: skill:owner:package:npm:@acme/pi-tools:review
+    type: skill
+    name: review
+    origins:
+      - scan
     scope: global
+    ownerPackageId: package:npm:@acme/pi-tools
     source:
-      kind: local-path
-      path: /Users/alex/.pi/agent/skills/review-workflow
-    installedPath: /Users/alex/.pi/agent/skills/review-workflow
-
-extensions:
-  - id: extension:company-tools
-    name: company-tools
-    scope: local
-    projectRoot: /Users/alex/projects/app
-    source:
-      kind: local-path
-      path: /Users/alex/projects/company-tools/pi-extension.ts
-    installedPath: /Users/alex/projects/app/.pi/extensions/company-tools.ts
+      kind: npm
+      spec: npm:@acme/pi-tools@1.2.3
+      name: "@acme/pi-tools"
 ```
 
-Profiles are portable for npm and Git references, including recorded Git refs. Local paths are machine-specific: **local paths must exist** on the destination for restore to use them. If a local source is missing, restore reports that failure, continues with independent entries, and never guesses or substitutes a different path.
+`origins` records whether each resource came from `scan`, manual addition, or both. Package-owned children retain `ownerPackageId`, so installation delegates to their owner package once.
 
 ## Safety
 
-Pi packages, skills, and plugins can execute arbitrary code. Review source code before installing any source, including code from npm, Git, or a local path. `--yes` disables the interactive confirmation safeguard, so use it only in an intentional, reviewed automation flow.
+Pi packages, skills, and extensions can execute arbitrary code. Review any source before installation, including npm, Git, and local paths. `--yes` bypasses the interactive selection safeguard, so use it only for intentional, reviewed automation.
 
-`pi-collection` delegates npm and Git package installation to `pi install` (and removal to `pi remove`). It does not run its own `npm install`, Git clone, or shell command for a supplied source. Use `--dry-run` for `add` and `profile restore` to inspect planned changes first.
+`pi-collection` delegates package installation to `pi install`. It does not run its own `npm install`, clone Git repositories, or execute a supplied source. Use `pi-collection install --dry-run` to inspect the planned actions first.
