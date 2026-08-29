@@ -70,7 +70,11 @@ export async function planInstall(
     packageIdentities.add(identity);
     if (resource.source.kind === "local-path" && !(await exists(resource.source.path))) {
       actions.push({ kind: "missing-local-source", id: resource.id, path: resource.source.path });
-    } else if (isPresent(resource, "package", resource.projectRoot, options.currentScan)) {
+    } else if (
+      isPresent(resource, "package", resource.projectRoot, options.currentScan)
+      && collection.resources.filter((candidate) => selected.has(candidate.id) && candidate.ownerPackageId === resource.id)
+        .every((candidate) => isPresent(candidate, candidate.type, candidate.projectRoot, options.currentScan))
+    ) {
       actions.push({ kind: "already-present", id: resource.id });
     } else {
       actions.push(packageInstallAction(resource));
