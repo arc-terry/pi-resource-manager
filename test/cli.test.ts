@@ -17,6 +17,10 @@ interface ProcessResult extends CliResult {
 }
 
 async function runProcess(command: string, args: string[]): Promise<ProcessResult> {
+  return runProcessWithInput(command, args);
+}
+
+async function runProcessWithInput(command: string, args: string[], input?: string): Promise<ProcessResult> {
   const child = spawn(command, args);
   let stdout = "";
   let stderr = "";
@@ -24,6 +28,7 @@ async function runProcess(command: string, args: string[]): Promise<ProcessResul
   child.stderr.setEncoding("utf8");
   child.stdout.on("data", (chunk: string) => { stdout += chunk; });
   child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+  if (input !== undefined) child.stdin.end(input);
   return new Promise((resolveResult) => {
     child.once("error", (error) => resolveResult({ code: 1, stdout, stderr, error }));
     child.once("close", (exitCode) => resolveResult({ code: exitCode ?? 1, stdout, stderr }));
@@ -106,6 +111,12 @@ test("runs when invoked through an npm-style symlink", async () => {
   assert.equal(result.error, undefined);
   assert.equal(result.code, 0);
   assert.match(result.stdout, /Usage: pi-collection/);
+});
+
+test("does not fail when cli is imported from stdin", async () => {
+  const result = await runProcessWithInput(process.execPath, ["-"], `import(${JSON.stringify(resolve("dist/cli.js"))});`);
+  assert.equal(result.error, undefined);
+  assert.equal(result.code, 0);
 });
 
 test("list filters types, renders full details, and emits JSON without prose", async () => {

@@ -184,8 +184,18 @@ function printRestoreSummary(summary: RestoreSummary): void {
   }
 }
 
-const invokedPath = process.argv[1] ? realpathSync(process.argv[1]) : undefined;
-if (invokedPath === fileURLToPath(import.meta.url)) {
+function canonicalEntrypoint(path: string | undefined): string | undefined {
+  if (!path) return undefined;
+  try {
+    return realpathSync(path);
+  } catch {
+    return undefined;
+  }
+}
+
+const invokedPath = canonicalEntrypoint(process.argv[1]);
+const modulePath = canonicalEntrypoint(fileURLToPath(import.meta.url));
+if (invokedPath !== undefined && invokedPath === modulePath) {
   await buildProgram().parseAsync(process.argv).catch((error: unknown) => {
     console.error(error instanceof Error ? error.message : error);
     process.exitCode = 1;
