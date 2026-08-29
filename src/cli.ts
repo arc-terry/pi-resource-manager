@@ -106,9 +106,16 @@ export function buildProgram(deps: CommandDependencies = {}): Command {
     .option("--project <path>", "restore local resources to this project")
     .option("--yes", "skip the confirmation prompt")
     .action(async (path: string, options: { dryRun?: boolean; only?: string; project?: string; yes?: boolean }) => {
-      const actions = await planRestore(await readProfile(path), {
+      const restoreProfile = await readProfile(path);
+      const projectRoot = options.project ?? recordedProjectRoot(restoreProfile);
+      const scan = deps.scan ?? scanPi;
+      const scanOptions = { agentDir: restoreProfile.profile.pi.agentDirectory, projectRoot };
+      const currentScan = await scan(scanOptions);
+      const actions = await planRestore(restoreProfile, {
         only: publicType(options.only),
         projectRoot: options.project,
+        agentDir: restoreProfile.profile.pi.agentDirectory,
+        currentScan,
       });
       printRestoreActions(actions);
       const summary = await executeRestore(actions, {
@@ -119,6 +126,7 @@ export function buildProgram(deps: CommandDependencies = {}): Command {
         piPath: deps.piPath,
         env: deps.env,
         cwd: deps.cwd,
+        rescan: async () => scan(scanOptions),
       });
       printRestoreSummary(summary);
       if (summary.failed > 0) process.exitCode = 1;
@@ -160,8 +168,19 @@ function printRestoreActions(actions: RestoreAction[]): void {
   }
 }
 
+function recordedProjectRoot(profile: Awaited<ReturnType<typeof readProfile>>): string | undefined {
+  return [...profile.packages, ...profile.skills, ...profile.extensions].find((entry) => entry.scope === "local")?.projectRoot;
+}
+
 function printRestoreSummary(summary: RestoreSummary): void {
   console.log(`installed: ${summary.installed}\nalready present: ${summary.alreadyPresent}\nskipped: ${summary.skipped}\nfailed: ${summary.failed}`);
+  for (const failure of summary.failures) {
+    console.log(`failure ${failure.id}: ${failure.message}`);
+    if (failure.command) console.log(`  command: ${failure.command}`);
+    if (failure.exitCode !== undefined) console.log(`  exit status: ${failure.exitCode}`);
+    if (failure.stdout !== undefined) console.log(`  stdout: ${failure.stdout}`);
+    if (failure.stderr !== undefined) console.log(`  stderr: ${failure.stderr}`);
+  }
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

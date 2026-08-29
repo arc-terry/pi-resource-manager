@@ -53,6 +53,13 @@ test("rejects a catalog with an unsupported schema version", async () => {
   await assert.rejects(loadCatalog(file), /schemaVersion/);
 });
 
+test("rejects bare npm names in catalog sources", async () => {
+  const file = join(await makeTempDir(), "catalog.yml");
+  await writeFile(file, "schemaVersion: 1\nentries:\n  - name: tools\n    type: package\n    source: tools\n");
+
+  await assert.rejects(loadCatalog(file), /Pi-supported source required: tools/);
+});
+
 const catalog = {
   schemaVersion: 1 as const,
   entries: [

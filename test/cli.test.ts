@@ -161,6 +161,7 @@ test("add validates a requested plugin after Pi installation", async () => {
   const success = await runCli(["add", "npm:plugin-tools", "--type", "plugin", "--yes"], { cwd, env });
   assert.equal(success.code, 0);
   assert.match(success.stdout, /validation: passed/);
+  assert.equal(await readFile(fake.log, "utf8"), "install npm:plugin-tools\n");
 
   const failure = await runCli(["add", "npm:plugin-tools", "--type", "skill", "--yes"], { cwd, env });
   assert.equal(failure.code, 1);

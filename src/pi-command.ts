@@ -7,6 +7,23 @@ export interface CommandResult {
   stderr: string;
 }
 
+export class PiCommandError extends Error {
+  constructor(
+    readonly command: string,
+    readonly args: string[],
+    readonly result?: CommandResult,
+    options?: { cause?: unknown },
+  ) {
+    super(PiCommandError.message(command, result, options?.cause), options);
+    this.name = "PiCommandError";
+  }
+
+  private static message(command: string, result?: CommandResult, cause?: unknown): string {
+    if (!result) return `${command} failed to start: ${cause instanceof Error ? cause.message : String(cause)}`;
+    return `${command} exited with code ${result.code}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`;
+  }
+}
+
 export async function runPi(
   args: string[],
   options: { piPath?: string; env?: NodeJS.ProcessEnv; cwd?: string } = {},
@@ -25,13 +42,11 @@ export async function runPi(
   child.stdout.on("data", (chunk: string) => { stdout += chunk; });
   child.stderr.on("data", (chunk: string) => { stderr += chunk; });
   const code = await new Promise<number>((resolve, reject) => {
-    child.once("error", (error) => reject(new Error(`${command} failed to start: ${error.message}`, { cause: error })));
+    child.once("error", (error) => reject(new PiCommandError(command, args, undefined, { cause: error })));
     child.once("close", (exitCode) => resolve(exitCode ?? 1));
   });
   const result = { code, stdout, stderr };
-  if (code !== 0) {
-    throw new Error(`${command} exited with code ${code}\nstdout: ${stdout}\nstderr: ${stderr}`);
-  }
+  if (code !== 0) throw new PiCommandError(command, args, result);
   return result;
 }
 

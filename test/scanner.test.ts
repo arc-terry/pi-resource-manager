@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import { locationsFor, updateSettingsArray } from "../src/settings.js";
+import { locationsFor, updateSettingsArray, writeFileAtomic } from "../src/settings.js";
 import { scanPi } from "../src/scanner.js";
 import { makeTempDir } from "./helpers.js";
 
@@ -67,6 +67,16 @@ test("updates a settings array without dropping unrelated settings", async () =>
   assert.deepEqual(JSON.parse(await readFile(path, "utf8")), {
     packages: ["npm:acme"], skills: ["old", "new"], theme: "dark",
   });
+});
+
+test("cleans up the temporary file when an atomic rename fails", async () => {
+  const root = await makeTempDir();
+  const destination = join(root, "destination");
+  await mkdir(destination);
+  const temporary = `${destination}.tmp-${process.pid}`;
+
+  await assert.rejects(writeFileAtomic(destination, "new contents"));
+  await assert.rejects(access(temporary));
 });
 
 test("scans local package settings and extension directory indexes", async () => {

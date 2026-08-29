@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Scope } from "./domain.js";
@@ -52,11 +52,17 @@ export async function readSettings(path: string): Promise<Record<string, unknown
 export async function writeFileAtomic(path: string, contents: string): Promise<void> {
   const temporaryPath = `${path}.tmp-${process.pid}`;
   await mkdir(dirname(path), { recursive: true });
+  let temporaryFile: Awaited<ReturnType<typeof open>> | undefined;
   try {
-    await writeFile(temporaryPath, contents);
+    temporaryFile = await open(temporaryPath, "w");
+    await temporaryFile.writeFile(contents);
+    await temporaryFile.sync();
+    await temporaryFile.close();
+    temporaryFile = undefined;
     await rename(temporaryPath, path);
   } catch (error) {
-    await rm(temporaryPath, { force: true });
+    await temporaryFile?.close().catch(() => undefined);
+    await rm(temporaryPath, { force: true }).catch(() => undefined);
     throw error;
   }
 }

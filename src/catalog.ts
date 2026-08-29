@@ -36,7 +36,11 @@ export async function loadCatalog(path: string): Promise<Catalog> {
 }
 
 export function catalogSource(catalog: Catalog, entry: CatalogEntry): ReturnType<typeof parsePiSource> {
-  return parsePiSource(entry.source, catalog.baseDir);
+  const source = parsePiSource(entry.source, catalog.baseDir);
+  if (source.kind === "npm" && !entry.source.startsWith("npm:")) {
+    throw new Error(`Pi-supported source required: ${entry.source}`);
+  }
+  return source;
 }
 
 export function matchCatalog(catalog: Catalog, scan: ScanResult): CatalogStatus[] {
