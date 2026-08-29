@@ -4,6 +4,7 @@ import { Command } from "commander";
 import { fileURLToPath } from "node:url";
 import YAML from "yaml";
 import { basename, extname } from "node:path";
+import { realpathSync } from "node:fs";
 import { type CatalogStatus } from "./catalog.js";
 import {
   addSource,
@@ -183,7 +184,18 @@ function printRestoreSummary(summary: RestoreSummary): void {
   }
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+function canonicalEntrypoint(path: string | undefined): string | undefined {
+  if (!path) return undefined;
+  try {
+    return realpathSync(path);
+  } catch {
+    return undefined;
+  }
+}
+
+const invokedPath = canonicalEntrypoint(process.argv[1]);
+const modulePath = canonicalEntrypoint(fileURLToPath(import.meta.url));
+if (invokedPath !== undefined && invokedPath === modulePath) {
   await buildProgram().parseAsync(process.argv).catch((error: unknown) => {
     console.error(error instanceof Error ? error.message : error);
     process.exitCode = 1;
