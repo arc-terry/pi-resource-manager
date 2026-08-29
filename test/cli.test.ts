@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import test from "node:test";
 import { basename, dirname, extname, join, resolve } from "node:path";
@@ -92,6 +92,17 @@ test("build output is directly executable", async () => {
   assert.equal(build.code, 0);
 
   const result = await runProcess(resolve("dist/cli.js"), ["--help"]);
+  assert.equal(result.error, undefined);
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /Usage: pi-collection/);
+});
+
+test("runs when invoked through an npm-style symlink", async () => {
+  const cwd = await makeTempDir();
+  const linked = join(cwd, "pi-collection");
+  await symlink(resolve("dist/cli.js"), linked);
+
+  const result = await runProcess(linked, ["--help"]);
   assert.equal(result.error, undefined);
   assert.equal(result.code, 0);
   assert.match(result.stdout, /Usage: pi-collection/);
