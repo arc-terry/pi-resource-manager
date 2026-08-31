@@ -143,7 +143,7 @@ export function collapseHomeReference(value: string, home = homedir(), separator
 }
 
 export function expandHomeReference(value: string, home = homedir(), separator = sep): string {
-  if (!value.includes("$HOME")) return value;
+  if (!/\$HOME(?=$|[\\/])/.test(value)) return value;
   for (const match of value.matchAll(/\$HOME[\\/]([^:]*)/g)) expandHomePath(`$HOME/${match[1]}`, home, separator);
   const expanded = value.replace(/\$HOME(?=$|[\\/])/g, home);
   return separator === "\\" ? expanded.replaceAll("/", "\\") : expanded.replaceAll("\\", "/");

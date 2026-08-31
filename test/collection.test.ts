@@ -99,6 +99,7 @@ test("home path codec preserves boundaries and platform separators", () => {
   const windowsId = `package:local:${windowsPath}`;
   assert.equal(expandHomeReference(collapseHomeReference(windowsId, windowsHome, "\\"), windowsHome, "\\"), windowsId);
   assert.equal(expandHomeReference("package:git:github.com/acme/tools", windowsHome, "\\"), "package:git:github.com/acme/tools");
+  assert.equal(expandHomeReference("package:git:github.com/acme/$HOMELESS/tools", windowsHome, "\\"), "package:git:github.com/acme/$HOMELESS/tools");
 });
 
 test("rejects legacy schema version one", async () => {
