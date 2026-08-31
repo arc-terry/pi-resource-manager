@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { posix, sep, win32 } from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
 import type { Resource, ResourceType, Scope, Source } from "./domain.js";
@@ -108,27 +108,45 @@ function mapCollectionPaths(
   };
 }
 
-function collapseHomePath(value: string): string {
-  const home = homedir();
-  const pathFromHome = relative(home, value);
+export function collapseHomePath(value: string, home = homedir(), separator = sep): string {
+  const paths = separator === "\\" ? win32 : posix;
+  const pathFromHome = paths.relative(home, value);
   if (pathFromHome === "") return "$HOME";
-  if (pathFromHome.startsWith("..") || isAbsolute(pathFromHome)) return value;
-  return `$HOME/${pathFromHome.split(sep).join("/")}`;
+  if (pathFromHome === ".." || pathFromHome.startsWith(`..${separator}`) || paths.isAbsolute(pathFromHome)) return value;
+  return `$HOME/${pathFromHome.split(separator).join("/")}`;
 }
 
-function expandHomePath(value: string): string {
-  if (value === "$HOME") return homedir();
-  if (value.startsWith("$HOME/") || value.startsWith("$HOME\\")) return resolve(homedir(), value.slice(6));
-  return value;
+export function expandHomePath(value: string, home = homedir(), separator = sep): string {
+  if (value === "$HOME") return home;
+  if (!value.startsWith("$HOME/") && !value.startsWith("$HOME\\")) return value;
+  const suffix = value.slice(6);
+  if (suffix === "" || suffix.startsWith("/") || suffix.startsWith("\\")) {
+    throw new Error(`Invalid portable home path: ${value}`);
+  }
+  const paths = separator === "\\" ? win32 : posix;
+  const expanded = paths.resolve(home, ...suffix.split(/[\\/]/));
+  const pathFromHome = paths.relative(home, expanded);
+  if (pathFromHome === ".." || pathFromHome.startsWith(`..${separator}`) || paths.isAbsolute(pathFromHome)) {
+    throw new Error(`Portable home path escapes $HOME: ${value}`);
+  }
+  return expanded;
 }
 
-function collapseHomeReference(value: string): string {
-  const escapedHome = homedir().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return value.replace(new RegExp(`${escapedHome}(?=$|[\\\\/])`, "g"), "$HOME").split(sep).join("/");
+export function collapseHomeReference(value: string, home = homedir(), separator = sep): string {
+  const escapedHome = home.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  let replaced = false;
+  const portable = value.replace(new RegExp(`(^|:)${escapedHome}(?=$|[\\\\/])`, "g"), (_match, prefix: string) => {
+    replaced = true;
+    return `${prefix}$HOME`;
+  });
+  return replaced ? portable.split(separator).join("/") : value;
 }
 
-function expandHomeReference(value: string): string {
-  return value.replace(/\$HOME(?=$|[\\/])/g, homedir());
+export function expandHomeReference(value: string, home = homedir(), separator = sep): string {
+  if (!value.includes("$HOME")) return value;
+  for (const match of value.matchAll(/\$HOME[\\/]([^:]*)/g)) expandHomePath(`$HOME/${match[1]}`, home, separator);
+  const expanded = value.replace(/\$HOME(?=$|[\\/])/g, home);
+  return separator === "\\" ? expanded.replaceAll("/", "\\") : expanded.replaceAll("\\", "/");
 }
 
 export function collectionResourceIdentity(

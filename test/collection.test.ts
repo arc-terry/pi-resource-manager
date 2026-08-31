@@ -4,8 +4,12 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
+  collapseHomePath,
+  collapseHomeReference,
   collectionSchema,
   emptyCollection,
+  expandHomePath,
+  expandHomeReference,
   mergeCollection,
   readCollection,
   resourcesFromScan,
@@ -77,6 +81,24 @@ test("stores home paths portably and expands them for runtime use", async () => 
   assert.match(yaml, /id: .*\$HOME\//);
   assert.match(yaml, /ownerPackageId: .*\$HOME\//);
   assert.deepEqual(await readCollection(path), collection);
+});
+
+test("home path codec preserves boundaries and platform separators", () => {
+  const home = homedir();
+  assert.equal(collapseHomePath(join(home, "..cache", "tool")), "$HOME/..cache/tool");
+  assert.equal(collapseHomePath(`/tmp${home}/tool`), `/tmp${home}/tool`);
+  assert.equal(collapseHomeReference(`package:local:/tmp${home}/tool`), `package:local:/tmp${home}/tool`);
+  assert.equal(expandHomePath("$HOMELESS/tool"), "$HOMELESS/tool");
+  assert.throws(() => expandHomePath("$HOME//tmp"), /Invalid portable home path/);
+  assert.throws(() => expandHomePath("$HOME/../tmp"), /escapes \$HOME/);
+
+  const windowsHome = String.raw`C:\Users\alice`;
+  const windowsPath = String.raw`C:\Users\alice\tools\plugin`;
+  assert.equal(collapseHomePath(windowsPath, windowsHome, "\\"), "$HOME/tools/plugin");
+  assert.equal(expandHomePath("$HOME/tools/plugin", windowsHome, "\\"), windowsPath);
+  const windowsId = `package:local:${windowsPath}`;
+  assert.equal(expandHomeReference(collapseHomeReference(windowsId, windowsHome, "\\"), windowsHome, "\\"), windowsId);
+  assert.equal(expandHomeReference("package:git:github.com/acme/tools", windowsHome, "\\"), "package:git:github.com/acme/tools");
 });
 
 test("rejects legacy schema version one", async () => {
