@@ -80,6 +80,7 @@ resources:
       spec: npm:@acme/pi-tools@1.2.3
       name: "@acme/pi-tools"
       version: 1.2.3
+    installedPath: $HOME/.pi/agent/npm/@acme/pi-tools
   - id: skill:owner:package:npm:@acme/pi-tools:review
     type: skill
     name: review
@@ -94,6 +95,8 @@ resources:
 ```
 
 `origins` records whether each resource came from `scan`, manual addition, or both. Package-owned children retain `ownerPackageId`, so installation delegates to their owner package once.
+
+Paths beneath the user's home directory are stored with the portable `$HOME` prefix. This applies to `installedPath`, `projectRoot`, local `source.path`, and path-bearing IDs/owner references. When the collection is read, `$HOME` expands to the current computer's home directory before scanning or installation. Paths outside the home directory remain absolute.
 
 ## Safety
 

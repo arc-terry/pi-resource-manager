@@ -15,6 +15,7 @@ test("README documents the unified three-command workflow", async () => {
     ["schema version 2", /schemaVersion:\s*2/],
     ["origins", /origins:/],
     ["non-destructive merge", /non-destructive merge/i],
+    ["portable home paths", /\$HOME.*installedPath|installedPath.*\$HOME/is],
     ["arbitrary-code security warning", /arbitrary code/i],
   ] as const;
 

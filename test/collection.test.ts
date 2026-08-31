@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
+  collapseHomePath,
+  collapseHomeReference,
   collectionSchema,
   emptyCollection,
+  expandHomePath,
+  expandHomeReference,
   mergeCollection,
   readCollection,
   resourcesFromScan,
@@ -31,6 +36,70 @@ test("schema-v2 collection round-trips through YAML", async () => {
   await writeCollectionAtomic(path, collection);
 
   assert.deepEqual(await readCollection(path), collection);
+});
+
+test("stores home paths portably and expands them for runtime use", async () => {
+  const path = join(await makeTempDir(), "pi-collection.yml");
+  const home = homedir();
+  const packagePath = join(home, "tools", "local-package");
+  const projectRoot = join(home, "projects", "app");
+  const packageId = `package:local:${packagePath}`;
+  const collection = {
+    ...emptyCollection("portable", new Date("2026-08-29T00:00:00Z")),
+    resources: [
+      {
+        id: packageId,
+        type: "package" as const,
+        name: "local-package",
+        origins: ["scan" as const],
+        scope: "local" as const,
+        projectRoot,
+        installedPath: join(projectRoot, ".pi", "local-package"),
+        source: { kind: "local-path" as const, path: packagePath },
+      },
+      {
+        id: `skill:owner:${packageId}:review`,
+        type: "skill" as const,
+        name: "review",
+        origins: ["scan" as const],
+        scope: "local" as const,
+        projectRoot,
+        installedPath: join(packagePath, "skills", "review"),
+        ownerPackageId: packageId,
+        source: { kind: "local-path" as const, path: packagePath },
+      },
+    ],
+  };
+
+  await writeCollectionAtomic(path, collection);
+
+  const yaml = await readFile(path, "utf8");
+  assert.equal(yaml.includes(home), false);
+  assert.match(yaml, /installedPath: \$HOME\//);
+  assert.match(yaml, /projectRoot: \$HOME\//);
+  assert.match(yaml, /path: \$HOME\//);
+  assert.match(yaml, /id: .*\$HOME\//);
+  assert.match(yaml, /ownerPackageId: .*\$HOME\//);
+  assert.deepEqual(await readCollection(path), collection);
+});
+
+test("home path codec preserves boundaries and platform separators", () => {
+  const home = homedir();
+  assert.equal(collapseHomePath(join(home, "..cache", "tool")), "$HOME/..cache/tool");
+  assert.equal(collapseHomePath(`/tmp${home}/tool`), `/tmp${home}/tool`);
+  assert.equal(collapseHomeReference(`package:local:/tmp${home}/tool`), `package:local:/tmp${home}/tool`);
+  assert.equal(expandHomePath("$HOMELESS/tool"), "$HOMELESS/tool");
+  assert.throws(() => expandHomePath("$HOME//tmp"), /Invalid portable home path/);
+  assert.throws(() => expandHomePath("$HOME/../tmp"), /escapes \$HOME/);
+
+  const windowsHome = String.raw`C:\Users\alice`;
+  const windowsPath = String.raw`C:\Users\alice\tools\plugin`;
+  assert.equal(collapseHomePath(windowsPath, windowsHome, "\\"), "$HOME/tools/plugin");
+  assert.equal(expandHomePath("$HOME/tools/plugin", windowsHome, "\\"), windowsPath);
+  const windowsId = `package:local:${windowsPath}`;
+  assert.equal(expandHomeReference(collapseHomeReference(windowsId, windowsHome, "\\"), windowsHome, "\\"), windowsId);
+  assert.equal(expandHomeReference("package:git:github.com/acme/tools", windowsHome, "\\"), "package:git:github.com/acme/tools");
+  assert.equal(expandHomeReference("package:git:github.com/acme/$HOMELESS/tools", windowsHome, "\\"), "package:git:github.com/acme/$HOMELESS/tools");
 });
 
 test("rejects legacy schema version one", async () => {
