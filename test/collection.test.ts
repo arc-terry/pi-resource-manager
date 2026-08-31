@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
@@ -30,6 +31,51 @@ test("schema-v2 collection round-trips through YAML", async () => {
 
   await writeCollectionAtomic(path, collection);
 
+  assert.deepEqual(await readCollection(path), collection);
+});
+
+test("stores home paths portably and expands them for runtime use", async () => {
+  const path = join(await makeTempDir(), "pi-collection.yml");
+  const home = homedir();
+  const packagePath = join(home, "tools", "local-package");
+  const projectRoot = join(home, "projects", "app");
+  const packageId = `package:local:${packagePath}`;
+  const collection = {
+    ...emptyCollection("portable", new Date("2026-08-29T00:00:00Z")),
+    resources: [
+      {
+        id: packageId,
+        type: "package" as const,
+        name: "local-package",
+        origins: ["scan" as const],
+        scope: "local" as const,
+        projectRoot,
+        installedPath: join(projectRoot, ".pi", "local-package"),
+        source: { kind: "local-path" as const, path: packagePath },
+      },
+      {
+        id: `skill:owner:${packageId}:review`,
+        type: "skill" as const,
+        name: "review",
+        origins: ["scan" as const],
+        scope: "local" as const,
+        projectRoot,
+        installedPath: join(packagePath, "skills", "review"),
+        ownerPackageId: packageId,
+        source: { kind: "local-path" as const, path: packagePath },
+      },
+    ],
+  };
+
+  await writeCollectionAtomic(path, collection);
+
+  const yaml = await readFile(path, "utf8");
+  assert.equal(yaml.includes(home), false);
+  assert.match(yaml, /installedPath: \$HOME\//);
+  assert.match(yaml, /projectRoot: \$HOME\//);
+  assert.match(yaml, /path: \$HOME\//);
+  assert.match(yaml, /id: .*\$HOME\//);
+  assert.match(yaml, /ownerPackageId: .*\$HOME\//);
   assert.deepEqual(await readCollection(path), collection);
 });
 

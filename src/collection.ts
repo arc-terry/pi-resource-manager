@@ -1,4 +1,6 @@
 import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
 import type { Resource, ResourceType, Scope, Source } from "./domain.js";
@@ -76,11 +78,57 @@ export function emptyCollection(name: string, now = new Date()): Collection {
 }
 
 export async function readCollection(path: string): Promise<Collection> {
-  return collectionSchema.parse(YAML.parse(await readFile(path, "utf8")));
+  const stored = collectionSchema.parse(YAML.parse(await readFile(path, "utf8")));
+  return collectionSchema.parse(mapCollectionPaths(stored, expandHomePath, expandHomeReference));
 }
 
 export async function writeCollectionAtomic(path: string, value: Collection): Promise<void> {
-  await writeFileAtomic(path, YAML.stringify(collectionSchema.parse(value)));
+  const runtime = collectionSchema.parse(value);
+  const portable = collectionSchema.parse(mapCollectionPaths(runtime, collapseHomePath, collapseHomeReference));
+  await writeFileAtomic(path, YAML.stringify(portable));
+}
+
+function mapCollectionPaths(
+  collection: Collection,
+  mapPath: (value: string) => string,
+  mapReference: (value: string) => string,
+): Collection {
+  return {
+    ...collection,
+    resources: collection.resources.map((resource) => ({
+      ...resource,
+      id: mapReference(resource.id),
+      ...(resource.ownerPackageId ? { ownerPackageId: mapReference(resource.ownerPackageId) } : {}),
+      ...(resource.installedPath ? { installedPath: mapPath(resource.installedPath) } : {}),
+      ...(resource.projectRoot ? { projectRoot: mapPath(resource.projectRoot) } : {}),
+      source: resource.source.kind === "local-path"
+        ? { ...resource.source, path: mapPath(resource.source.path) }
+        : resource.source,
+    })),
+  };
+}
+
+function collapseHomePath(value: string): string {
+  const home = homedir();
+  const pathFromHome = relative(home, value);
+  if (pathFromHome === "") return "$HOME";
+  if (pathFromHome.startsWith("..") || isAbsolute(pathFromHome)) return value;
+  return `$HOME/${pathFromHome.split(sep).join("/")}`;
+}
+
+function expandHomePath(value: string): string {
+  if (value === "$HOME") return homedir();
+  if (value.startsWith("$HOME/") || value.startsWith("$HOME\\")) return resolve(homedir(), value.slice(6));
+  return value;
+}
+
+function collapseHomeReference(value: string): string {
+  const escapedHome = homedir().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return value.replace(new RegExp(`${escapedHome}(?=$|[\\\\/])`, "g"), "$HOME").split(sep).join("/");
+}
+
+function expandHomeReference(value: string): string {
+  return value.replace(/\$HOME(?=$|[\\/])/g, homedir());
 }
 
 export function collectionResourceIdentity(
