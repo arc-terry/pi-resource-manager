@@ -92,6 +92,24 @@ test("install scans saved local project roots before planning", async () => {
   await assert.rejects(readFile(fake.log, "utf8"));
 });
 
+test("install accepts an explicit collection YAML path", async () => {
+  const cwd = await makeTempDir();
+  const profileDir = join(cwd, "profile");
+  const profilePath = join(profileDir, "terry-pi-collection.yml");
+  await mkdir(profileDir, { recursive: true });
+  await writeCollectionAtomic(profilePath, scannedToolsCollection);
+
+  for (const path of [join("profile", "terry-pi-collection.yml"), profilePath]) {
+    const result = await runCli(["install", path, "--yes", "--dry-run"], { cwd });
+    assert.equal(result.code, 0);
+    assert.match(result.stdout, /pi install npm:tools/);
+  }
+
+  const missing = await runCli(["install", "profile/missing.yml", "--yes"], { cwd });
+  assert.equal(missing.code, 1);
+  assert.match(missing.stderr, /missing\.yml|ENOENT/);
+});
+
 // Fails if the legacy Commander command surface remains, unified commands do not
 // persist their intended origins, or noninteractive/dry-run installation regresses.
 test("CLI exposes only scan, add, and install", async () => {

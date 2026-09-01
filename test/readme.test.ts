@@ -10,6 +10,7 @@ test("README documents the unified three-command workflow", async () => {
     ["add --scan", /pi-collection add --scan/],
     ["add npm:", /pi-collection add npm:/],
     ["install --dry-run", /pi-collection install --dry-run/],
+    ["install custom collection path", /pi-collection install profile\/terry-pi-collection\.yml/],
     ["install --yes for CI", /\bCI\b[\s\S]*--yes|--yes[\s\S]*\bCI\b/i],
     ["TUI controls", /↑\/↓ Move[\s\S]*Space Toggle[\s\S]*A All[\s\S]*N None[\s\S]*Enter Install[\s\S]*Esc Cancel/i],
     ["schema version 2", /schemaVersion:\s*2/],

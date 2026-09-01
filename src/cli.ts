@@ -34,16 +34,16 @@ export function buildProgram(deps: CommandDependencies = {}): Command {
       console.log(`wrote collection: pi-collection.yml\nresources: ${collection.resources.length}`);
     });
 
-  program.command("install")
+  program.command("install [collection-path]")
     .option("--dry-run")
     .option("--yes")
-    .action(async (options: { dryRun?: boolean; yes?: boolean }) => {
-      const collection = await readCollection("pi-collection.yml");
+    .action(async (collectionPath: string | undefined, options: { dryRun?: boolean; yes?: boolean }) => {
+      const collection = await readCollection(collectionPath ?? "pi-collection.yml");
       const currentScan = await scanInstallResources(collection, deps);
       const state = buildSelection(collection, currentScan, { missingLocalIds: await missingLocalIds(collection.resources) });
       const selected = options.yes
         ? selectedResourceIds(state)
-        : await runInstallTui(state, { input: process.stdin, output: process.stdout });
+        : await runInstallTui(state, { input: process.stdin, output: process.stdout, closeInput: true });
       if (selected === undefined) return;
 
       const actions = await planInstall(collection, selected, { currentScan });

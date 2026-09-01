@@ -25,7 +25,15 @@ export interface TuiOptions {
   input: TuiInput;
   output: Writable;
   signalSource?: SignalSource;
+  closeInput?: boolean;
 }
+
+type StreamListener = (...args: any[]) => void;
+interface KeypressListeners {
+  data: StreamListener[];
+  newListener: StreamListener[];
+}
+const keypressListenersByInput = new WeakMap<TuiInput, KeypressListeners>();
 
 export function renderSelection(state: SelectionState): string {
   const resources = new Map(state.collection.resources.map((resource) => [resource.id, resource]));
@@ -45,7 +53,30 @@ export async function runInstallTui(initial: SelectionState, options: TuiOptions
     throw new Error("install requires an interactive terminal; use --yes for non-interactive use");
   }
 
-  emitKeypressEvents(input);
+  const inputWasFlowing = input.readableFlowing === true;
+  const existingDataListeners = new Set(input.listeners("data"));
+  const existingNewListeners = new Set(input.listeners("newListener"));
+  const cachedKeypressListeners = keypressListenersByInput.get(input);
+  if (cachedKeypressListeners) {
+    const listeners = cachedKeypressListeners.newListener.length > 0
+      ? cachedKeypressListeners.newListener
+      : cachedKeypressListeners.data;
+    const event = cachedKeypressListeners.newListener.length > 0 ? "newListener" : "data";
+    for (const listener of listeners) input.on(event, listener);
+  } else {
+    emitKeypressEvents(input);
+  }
+  let keypressListeners: KeypressListeners = cachedKeypressListeners ?? { data: [], newListener: [] };
+  const captureKeypressListeners = () => {
+    const data = input.listeners("data").filter((listener) => !existingDataListeners.has(listener)) as StreamListener[];
+    const newListener = input.listeners("newListener").filter((listener) => !existingNewListeners.has(listener)) as StreamListener[];
+    keypressListeners = {
+      data: [...new Set([...keypressListeners.data, ...data])],
+      newListener: [...new Set([...keypressListeners.newListener, ...newListener])],
+    };
+    keypressListenersByInput.set(input, keypressListeners);
+  };
+  captureKeypressListeners();
   const signalSource = options.signalSource ?? process;
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
   let state = initial;
@@ -68,6 +99,15 @@ export async function runInstallTui(initial: SelectionState, options: TuiOptions
     } catch (error) {
       cleanupError ??= error;
     }
+    for (const [event, listeners] of [["data", keypressListeners.data], ["newListener", keypressListeners.newListener]] as const) {
+      for (const listener of listeners) {
+        try {
+          input.removeListener(event, listener);
+        } catch (error) {
+          cleanupError ??= error;
+        }
+      }
+    }
     try {
       input.setRawMode!(false);
     } catch (error) {
@@ -77,6 +117,20 @@ export async function runInstallTui(initial: SelectionState, options: TuiOptions
       output.write("\u001b[?25h\n");
     } catch (error) {
       cleanupError ??= error;
+    }
+    if (!inputWasFlowing) {
+      try {
+        input.pause();
+      } catch (error) {
+        cleanupError ??= error;
+      }
+    }
+    if (options.closeInput) {
+      try {
+        input.destroy();
+      } catch (error) {
+        cleanupError ??= error;
+      }
     }
     if (cleanupError !== undefined) throw cleanupError;
   };
@@ -125,6 +179,7 @@ export async function runInstallTui(initial: SelectionState, options: TuiOptions
     input.setRawMode(true);
     input.resume();
     input.on("keypress", onKey);
+    captureKeypressListeners();
     for (const signal of signals) signalSource.on(signal, onSignal);
     output.write("\u001b[?25l");
     draw();
