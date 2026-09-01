@@ -49,10 +49,11 @@ Adding only records resources in `pi-collection.yml`; it does **not** install an
 
 ```sh
 pi-collection install
-pi-collection install --dry-run --yes
+pi-collection install profile/terry-pi-collection.yml
+pi-collection install profile/terry-pi-collection.yml --dry-run --yes
 ```
 
-`install` loads `pi-collection.yml`, scans the destination, and opens a selection TUI. Resources with the `scan` origin are selected by default; manually added resources are initially unselected. Package-owned skills and extensions are grouped beneath their package.
+`install` loads `pi-collection.yml` by default. Pass a relative or absolute YAML path to adopt a different collection. It scans the destination and opens a selection TUI. Resources with the `scan` origin are selected by default; manually added resources are initially unselected. Package-owned skills and extensions are grouped beneath their package.
 
 TUI keys: `↑/↓ Move`, `Space Toggle`, `A All`, `N None`, `Enter Install`, `Esc Cancel`.
 

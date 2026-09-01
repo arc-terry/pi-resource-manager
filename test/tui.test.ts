@@ -67,6 +67,38 @@ test("TUI renders grouped selection and handles selection, confirmation, cancell
   );
 });
 
+test("TUI restores stdin to its original paused state", async () => {
+  for (const key of ["\r", "\u001b"]) {
+    const tty = fakeTty();
+    tty.input.pause();
+    assert.equal(tty.input.isPaused(), true);
+    const dataListeners = tty.input.listenerCount("data");
+    const result = runInstallTui(buildSelection(collection, emptyScan), tty);
+    tty.input.write(key);
+    await result;
+    assert.equal(tty.input.isPaused(), true);
+    assert.equal(tty.input.listenerCount("data"), dataListeners);
+  }
+
+  const tty = fakeTty();
+  tty.input.pause();
+  const write = tty.output.write.bind(tty.output);
+  tty.output.write = ((chunk: string | Uint8Array) => {
+    if (String(chunk).startsWith("\u001b[2J")) throw new Error("draw failed");
+    return write(chunk);
+  }) as typeof tty.output.write;
+  await assert.rejects(runInstallTui(buildSelection(collection, emptyScan), tty), /draw failed/);
+  assert.equal(tty.input.isPaused(), true);
+});
+
+test("TUI closes input when requested by the standalone CLI", async () => {
+  const tty = fakeTty();
+  const result = runInstallTui(buildSelection(collection, emptyScan), { ...tty, closeInput: true } as Parameters<typeof runInstallTui>[1]);
+  tty.input.write("\r");
+  await result;
+  assert.equal(tty.input.destroyed, true);
+});
+
 test("TUI ignores a synchronous key following confirmation and restores the terminal", async () => {
   const tty = fakeTty();
   const result = runInstallTui(buildSelection(collection, emptyScan), tty);

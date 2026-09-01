@@ -25,7 +25,11 @@ export interface TuiOptions {
   input: TuiInput;
   output: Writable;
   signalSource?: SignalSource;
+  closeInput?: boolean;
 }
+
+type DataListener = (...args: any[]) => void;
+const keypressDataListenersByInput = new WeakMap<TuiInput, DataListener[]>();
 
 export function renderSelection(state: SelectionState): string {
   const resources = new Map(state.collection.resources.map((resource) => [resource.id, resource]));
@@ -45,7 +49,11 @@ export async function runInstallTui(initial: SelectionState, options: TuiOptions
     throw new Error("install requires an interactive terminal; use --yes for non-interactive use");
   }
 
-  emitKeypressEvents(input);
+  const inputWasFlowing = input.readableFlowing === true;
+  const existingDataListeners = new Set(input.listeners("data"));
+  const cachedKeypressDataListeners = keypressDataListenersByInput.get(input);
+  if (!cachedKeypressDataListeners) emitKeypressEvents(input);
+  let keypressDataListeners = cachedKeypressDataListeners ?? [];
   const signalSource = options.signalSource ?? process;
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
   let state = initial;
@@ -68,6 +76,13 @@ export async function runInstallTui(initial: SelectionState, options: TuiOptions
     } catch (error) {
       cleanupError ??= error;
     }
+    for (const listener of keypressDataListeners) {
+      try {
+        input.removeListener("data", listener);
+      } catch (error) {
+        cleanupError ??= error;
+      }
+    }
     try {
       input.setRawMode!(false);
     } catch (error) {
@@ -77,6 +92,20 @@ export async function runInstallTui(initial: SelectionState, options: TuiOptions
       output.write("\u001b[?25h\n");
     } catch (error) {
       cleanupError ??= error;
+    }
+    if (!inputWasFlowing) {
+      try {
+        input.pause();
+      } catch (error) {
+        cleanupError ??= error;
+      }
+    }
+    if (options.closeInput) {
+      try {
+        input.destroy();
+      } catch (error) {
+        cleanupError ??= error;
+      }
     }
     if (cleanupError !== undefined) throw cleanupError;
   };
@@ -124,7 +153,14 @@ export async function runInstallTui(initial: SelectionState, options: TuiOptions
   try {
     input.setRawMode(true);
     input.resume();
+    if (cachedKeypressDataListeners) {
+      for (const listener of cachedKeypressDataListeners) input.on("data", listener);
+    }
     input.on("keypress", onKey);
+    if (!cachedKeypressDataListeners) {
+      keypressDataListeners = input.listeners("data").filter((listener) => !existingDataListeners.has(listener)) as DataListener[];
+      keypressDataListenersByInput.set(input, keypressDataListeners);
+    }
     for (const signal of signals) signalSource.on(signal, onSignal);
     output.write("\u001b[?25l");
     draw();
