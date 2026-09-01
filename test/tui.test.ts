@@ -92,11 +92,47 @@ test("TUI restores stdin to its original paused state", async () => {
 });
 
 test("TUI closes input when requested by the standalone CLI", async () => {
+  for (const key of ["\r", "\u001b"]) {
+    const tty = fakeTty();
+    const result = runInstallTui(buildSelection(collection, emptyScan), { ...tty, closeInput: true } as Parameters<typeof runInstallTui>[1]);
+    tty.input.write(key);
+    await result;
+    assert.equal(tty.input.destroyed, true);
+  }
+
   const tty = fakeTty();
-  const result = runInstallTui(buildSelection(collection, emptyScan), { ...tty, closeInput: true } as Parameters<typeof runInstallTui>[1]);
-  tty.input.write("\r");
-  await result;
+  const write = tty.output.write.bind(tty.output);
+  tty.output.write = ((chunk: string | Uint8Array) => {
+    if (String(chunk).startsWith("\u001b[2J")) throw new Error("draw failed");
+    return write(chunk);
+  }) as typeof tty.output.write;
+  await assert.rejects(
+    runInstallTui(buildSelection(collection, emptyScan), { ...tty, closeInput: true } as Parameters<typeof runInstallTui>[1]),
+    /draw failed/,
+  );
   assert.equal(tty.input.destroyed, true);
+});
+
+test("TUI cleans readline listeners after startup errors and supports input reuse", async () => {
+  const failed = fakeTty();
+  const dataListeners = failed.input.listenerCount("data");
+  const newListeners = failed.input.listenerCount("newListener");
+  failed.input.setRawMode = (enabled) => {
+    failed.calls.push(enabled);
+    if (enabled) throw new Error("raw setup failed");
+  };
+  await assert.rejects(runInstallTui(buildSelection(collection, emptyScan), failed), /raw setup failed/);
+  assert.equal(failed.input.listenerCount("data"), dataListeners);
+  assert.equal(failed.input.listenerCount("newListener"), newListeners);
+
+  const reused = fakeTty();
+  for (let run = 0; run < 2; run++) {
+    const result = runInstallTui(buildSelection(collection, emptyScan), reused);
+    reused.input.write("\r");
+    assert.deepEqual(await result, ["pkg", "skill:a"]);
+    assert.equal(reused.input.listenerCount("data"), 0);
+    assert.equal(reused.input.listenerCount("keypress"), 0);
+  }
 });
 
 test("TUI ignores a synchronous key following confirmation and restores the terminal", async () => {
