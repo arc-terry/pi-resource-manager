@@ -1,8 +1,41 @@
 schemaVersion: 2
 collection:
   name: pi-resource-manager
-  updatedAt: 2026-08-31T17:07:26.594Z
+  updatedAt: 2026-09-21T05:56:15.408Z
 resources:
+  - id: package:npm:pi-provider-litellm
+    type: package
+    name: pi-provider-litellm
+    origins:
+      - scan
+    scope: global
+    source:
+      kind: npm
+      spec: npm:pi-provider-litellm
+      name: pi-provider-litellm
+    installedPath: $HOME/.pi/agent/npm/pi-provider-litellm
+  - id: package:npm:@andrewjacop/pi-herdr
+    type: package
+    name: "@andrewjacop/pi-herdr"
+    origins:
+      - scan
+    scope: global
+    source:
+      kind: npm
+      spec: npm:@andrewjacop/pi-herdr
+      name: "@andrewjacop/pi-herdr"
+    installedPath: $HOME/.pi/agent/npm/@andrewjacop/pi-herdr
+  - id: package:git:github.com/obra/superpowers
+    type: package
+    name: superpowers
+    origins:
+      - scan
+    scope: global
+    source:
+      kind: git
+      spec: git:github.com/obra/superpowers
+      url: github.com/obra/superpowers
+    installedPath: $HOME/.pi/agent/git/github.com/obra/superpowers
   - id: package:npm:@latentminds/pi-quotas
     type: package
     name: "@latentminds/pi-quotas"
@@ -15,18 +48,6 @@ resources:
       name: "@latentminds/pi-quotas"
       version: 0.4.0
     installedPath: $HOME/.pi/agent/npm/@latentminds/pi-quotas
-  - id: package:npm:@andrewjacop/pi-herdr
-    type: package
-    name: "@andrewjacop/pi-herdr"
-    origins:
-      - scan
-    scope: global
-    source:
-      kind: npm
-      spec: npm:@andrewjacop/pi-herdr@0.3.0
-      name: "@andrewjacop/pi-herdr"
-      version: 0.3.0
-    installedPath: $HOME/.pi/agent/npm/@andrewjacop/pi-herdr
   - id: package:git:github.com/MasuRii/pi-rtk-optimizer
     type: package
     name: pi-rtk-optimizer
@@ -38,28 +59,6 @@ resources:
       spec: git:github.com/MasuRii/pi-rtk-optimizer
       url: github.com/MasuRii/pi-rtk-optimizer
     installedPath: $HOME/.pi/agent/git/github.com/MasuRii/pi-rtk-optimizer
-  - id: package:git:github.com/obra/superpowers
-    type: package
-    name: superpowers
-    origins:
-      - scan
-    scope: global
-    source:
-      kind: git
-      spec: git:github.com/obra/superpowers
-      url: github.com/obra/superpowers
-    installedPath: $HOME/.pi/agent/git/github.com/obra/superpowers
-  - id: package:git:github.com/arc-terry/herdr-superpowers-tdd
-    type: package
-    name: herdr-superpowers-tdd
-    origins:
-      - scan
-    scope: global
-    source:
-      kind: git
-      spec: git:github.com/arc-terry/herdr-superpowers-tdd
-      url: github.com/arc-terry/herdr-superpowers-tdd
-    installedPath: $HOME/.pi/agent/git/github.com/arc-terry/herdr-superpowers-tdd
   - id: package:npm:@dietrichgebert/ponytail
     type: package
     name: "@dietrichgebert/ponytail"
@@ -71,6 +70,17 @@ resources:
       spec: npm:@dietrichgebert/ponytail
       name: "@dietrichgebert/ponytail"
     installedPath: $HOME/.pi/agent/npm/@dietrichgebert/ponytail
+  - id: package:npm:pi-herdr-agents
+    type: package
+    name: pi-herdr-agents
+    origins:
+      - scan
+    scope: global
+    source:
+      kind: npm
+      spec: npm:pi-herdr-agents
+      name: pi-herdr-agents
+    installedPath: $HOME/.pi/agent/npm/pi-herdr-agents
   - id: skill:owner:package:git:github.com/obra/superpowers:brainstorming
     type: skill
     name: brainstorming
@@ -239,30 +249,6 @@ resources:
       url: github.com/obra/superpowers
     installedPath: $HOME/.pi/agent/git/github.com/obra/superpowers/skills/writing-skills
     ownerPackageId: package:git:github.com/obra/superpowers
-  - id: skill:owner:package:git:github.com/arc-terry/herdr-superpowers-tdd:herder-superpowers-tdd
-    type: skill
-    name: herder-superpowers-tdd
-    origins:
-      - scan
-    scope: global
-    source:
-      kind: git
-      spec: git:github.com/arc-terry/herdr-superpowers-tdd
-      url: github.com/arc-terry/herdr-superpowers-tdd
-    installedPath: $HOME/.pi/agent/git/github.com/arc-terry/herdr-superpowers-tdd
-    ownerPackageId: package:git:github.com/arc-terry/herdr-superpowers-tdd
-  - id: extension:owner:package:git:github.com/MasuRii/pi-rtk-optimizer:pi-rtk-optimizer
-    type: extension
-    name: pi-rtk-optimizer
-    origins:
-      - scan
-    scope: global
-    source:
-      kind: git
-      spec: git:github.com/MasuRii/pi-rtk-optimizer
-      url: github.com/MasuRii/pi-rtk-optimizer
-    installedPath: $HOME/.pi/agent/git/github.com/MasuRii/pi-rtk-optimizer/index.ts
-    ownerPackageId: package:git:github.com/MasuRii/pi-rtk-optimizer
   - id: extension:owner:package:git:github.com/obra/superpowers:superpowers
     type: extension
     name: superpowers
@@ -275,15 +261,25 @@ resources:
       url: github.com/obra/superpowers
     installedPath: $HOME/.pi/agent/git/github.com/obra/superpowers/.pi/extensions/superpowers.ts
     ownerPackageId: package:git:github.com/obra/superpowers
-  - id: extension:owner:package:git:github.com/arc-terry/herdr-superpowers-tdd:tdd-herdr
+  - id: extension:owner:package:git:github.com/MasuRii/pi-rtk-optimizer:pi-rtk-optimizer
     type: extension
-    name: tdd-herdr
+    name: pi-rtk-optimizer
     origins:
       - scan
     scope: global
     source:
       kind: git
-      spec: git:github.com/arc-terry/herdr-superpowers-tdd
-      url: github.com/arc-terry/herdr-superpowers-tdd
-    installedPath: $HOME/.pi/agent/git/github.com/arc-terry/herdr-superpowers-tdd/extensions/tdd-herdr.ts
-    ownerPackageId: package:git:github.com/arc-terry/herdr-superpowers-tdd
+      spec: git:github.com/MasuRii/pi-rtk-optimizer
+      url: github.com/MasuRii/pi-rtk-optimizer
+    installedPath: $HOME/.pi/agent/git/github.com/MasuRii/pi-rtk-optimizer/index.ts
+    ownerPackageId: package:git:github.com/MasuRii/pi-rtk-optimizer
+  - id: extension:local:$HOME/.pi/agent/extensions/herdr-agent-state.ts:herdr-agent-state
+    type: extension
+    name: herdr-agent-state
+    origins:
+      - scan
+    scope: global
+    source:
+      kind: local-path
+      path: $HOME/.pi/agent/extensions/herdr-agent-state.ts
+    installedPath: $HOME/.pi/agent/extensions/herdr-agent-state.ts
